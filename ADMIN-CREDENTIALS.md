@@ -14,7 +14,7 @@ These defaults are also set in `.dev.vars` as:
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=Admin@KPPP2026!
 ADMIN_NAME=System Administrator
-SESSION_SECRET=change-me-to-a-long-random-string
+SESSION_SECRET=i+d8NmVQjMv9Lw31BGSBk8oFE1slYL/2zXbJ8tTIGfsEJHE9W00Ku7BCef4BB3iK
 ```
 
 ## Notes
