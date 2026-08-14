@@ -116,7 +116,10 @@
       body: JSON.stringify({ username, password })
     });
     if (!response.ok || !data?.success || !data.token) {
-      throw new Error(data?.message || 'Sign-in failed');
+      if (!data) {
+        throw new Error('Sign-in failed (no API response). Confirm /api/auth/login is served by the Worker, not static assets.');
+      }
+      throw new Error(data.message || ('Sign-in failed (HTTP ' + response.status + ')'));
     }
     setSession(data.token, data.user);
     return data.user;
