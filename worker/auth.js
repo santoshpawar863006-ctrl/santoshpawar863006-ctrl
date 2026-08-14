@@ -113,15 +113,27 @@ async function ensureAdminSeeded(env) {
     };
     store.users.push(admin);
     changed = true;
-  } else if (String(env.ADMIN_RESET || '').toLowerCase() === 'true') {
-    const pwd = await hashPassword(adminPass);
-    admin.password_salt = pwd.salt;
-    admin.password_hash = pwd.hash;
-    admin.role = 'admin';
-    admin.active = true;
-    admin.name = adminName;
-    admin.updated_at = new Date().toISOString();
-    changed = true;
+  } else {
+    // Keep the bootstrap admin in sync with Worker secrets.
+    // Fixes production login when admin was first seeded before secrets were set,
+    // or when ADMIN_PASSWORD was changed in the Cloudflare dashboard.
+    const forceReset = String(env.ADMIN_RESET || '').toLowerCase() === 'true';
+    const envPasswordSet = Boolean(String(env.ADMIN_PASSWORD || '').trim());
+    const passwordMatches = envPasswordSet ? await verifyPassword(adminPass, admin) : true;
+    if (forceReset || (envPasswordSet && !passwordMatches)) {
+      const pwd = await hashPassword(adminPass);
+      admin.password_salt = pwd.salt;
+      admin.password_hash = pwd.hash;
+      admin.role = 'admin';
+      admin.active = true;
+      admin.name = adminName || admin.name;
+      admin.updated_at = new Date().toISOString();
+      changed = true;
+    } else if (adminName && admin.name !== adminName) {
+      admin.name = adminName;
+      admin.updated_at = new Date().toISOString();
+      changed = true;
+    }
   }
 
   if (changed) await saveUsers(env, store);
