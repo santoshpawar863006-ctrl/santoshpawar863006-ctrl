@@ -10,33 +10,44 @@ Use these to sign in at `/login.html`.
 
 ## Cloudflare Worker secrets (required for production)
 
-Open your **deployed Worker** → **Settings** → **Variables and Secrets** (runtime secrets, not Build variables) and set:
+Open the **exact Worker that serves your live URL** (check the hostname / Workers list — it may be named `karnataka-tender-intelligence`, `kppp`, or `santoshpawar863006-ctrl`):
+
+**Settings → Variables and Secrets** (runtime, not Build variables):
 
 | Name | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Claude bid calculator (`sk-ant-…` from console.anthropic.com) |
+| `ANTHROPIC_API_KEY` | Claude bid calculator |
 | `ADMIN_USERNAME` | Bootstrap admin login |
 | `ADMIN_PASSWORD` | Bootstrap admin password |
 | `ADMIN_NAME` | Display name |
 | `SESSION_SECRET` | Random string (`openssl rand -base64 48`) |
 
-Build/CI variables do **not** become Worker `env` values. If Claude says the key is missing, the secret is not on the Worker runtime.
+### Verify the key is on the right Worker
 
-Locally, put the same keys in `.dev.vars` (never commit that file).
+After deploy, open:
 
-## Why Cloudflare can show “Refer tender” while localhost looks complete
+`https://YOUR-WORKER.workers.dev/api/debug/env`
 
-1. **Claude** — localhost loads `ANTHROPIC_API_KEY` from `.dev.vars`; Cloudflare only sees Worker secrets.
-2. **TenderKart / BidAssist enrichment** — the UI fills missing amounts via `/api/public_tender_detail`. TenderKart often returns a bot-challenge page to Cloudflare Workers, so enrichment fails in production even when localhost still shows old browser `localStorage` cache.
-3. **Base amounts** still come from the hourly GitHub `tenders.json` collector. After deploy, hard-refresh and check System Health → `anthropic.configured` and `tenderkart.blocked_by_bot_protection`.
+You should see `"ANTHROPIC_API_KEY": true`. If it is `false`, the secret is on a different Worker or only set as a Build variable.
+
+Also check **System Health** in the app — it now shows Claude + secret binding status.
+
+`wrangler.jsonc` sets `keep_vars: true` so dashboard variables are not wiped on Git deploys.
+
+Locally, copy `.dev.vars.example` → `.dev.vars` (never commit `.dev.vars`).
+
+## Why Cloudflare can look emptier than localhost (`KPPP-NEEWWW` on :8787)
+
+1. **Claude** — localhost reads `.dev.vars`; Cloudflare only sees Worker runtime secrets on that script.
+2. **TenderKart enrichment** — fills many “Refer tender” cells. TenderKart often bot-blocks Cloudflare Workers; localhost may still show old browser `localStorage` cache.
+3. Base tender list still comes from the GitHub collector / deployed `tenders.json`.
 
 ## Notes
 
-- On first Worker start, the admin account is seeded into Cloudflare KV (`AUTH_STORE`).
-- The bootstrap admin password stays in sync with `ADMIN_PASSWORD`.
-- Optional: set `ADMIN_RESET=true` once to force a reset, then remove it.
+- Admin is seeded into KV (`AUTH_STORE`) and stays in sync with `ADMIN_PASSWORD`.
+- Optional: `ADMIN_RESET=true` once, then remove it.
 - Admins manage users at `/admin.html`.
 
 ## Cloudflare auto-deploy (built-in)
 
-Workers → Settings → Build / Connect to Git → `kppp` repo → branch `main` → deploy with `npx wrangler deploy`. Ensure `wrangler.jsonc` has a real `AUTH_STORE` KV namespace ID.
+Workers → Settings → Build / Connect to Git → `kppp` repo → branch `main`.
