@@ -1,0 +1,18 @@
+{
+  "last_success_at": "2026-08-14T05:18:55.133180+00:00",
+  "generated_at": "2026-08-14T05:18:54.625602+00:00",
+  "status": "healthy",
+  "count": 4776,
+  "category_counts": {
+    "WORKS": 2985,
+    "GOODS": 617,
+    "SERVICES": 1174
+  },
+  "previous_count": 4761,
+  "guard": {
+    "zero_protection": true,
+    "abnormal_drop_protection": true,
+    "abnormal_jump_protection": true,
+    "last_good_source": "Git history"
+  }
+}

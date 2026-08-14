@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "karnataka-tender-intelligence",
+  "main": "./worker/index.js",
+  "compatibility_date": "2026-08-12",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api/*",
+      "/tenders.json",
+      "/health.json"
+    ]
+  },
+  "kv_namespaces": [
+    {
+      "binding": "AUTH_STORE",
+      "id": "00000000000000000000000000000001",
+      "preview_id": "00000000000000000000000000000002"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

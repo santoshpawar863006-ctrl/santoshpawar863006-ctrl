@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Closed & Awarded Tenders</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/auth.css?v=20260814a">
+<link rel="stylesheet" href="/app.css?v=20260814a">
+<link rel="stylesheet" href="/history.css">
+<script src="/auth-client.js?v=20260814a"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <h1>Closed &amp; Awarded Tenders</h1>
+      <p>KPPP tender history, result checks and contractor search</p>
+    </div>
+    <div class="live-chip"><span class="dot"></span> History desk</div>
+  </div>
+</header>
+
+<main class="history-shell">
+  <div class="history-nav">
+    <a href="/">🟢 Live Tenders</a>
+    <a class="active" href="/history.html">📕 Closed / Awarded</a>
+  </div>
+
+  <section class="history-grid">
+    <div class="history-card"><span>Closed Records</span><strong id="statClosed">0</strong></div>
+    <div class="history-card"><span>Works</span><strong id="statWorks">0</strong></div>
+    <div class="history-card"><span>Awarded</span><strong id="statAwardHints">0</strong></div>
+    <div class="history-card"><span>Results Checked</span><strong id="statResults">0</strong></div>
+  </section>
+
+  <section class="history-tools">
+    <input id="historySearch" placeholder="Search tender number, work, department, city…">
+    <select id="historyCategory">
+      <option value="ALL">All categories</option>
+      <option value="WORKS">WORKS</option>
+      <option value="GOODS">GOODS</option>
+      <option value="SERVICES">SERVICES</option>
+    </select>
+    <select id="historyCity">
+      <option value="ALL">All cities</option>
+    </select>
+    <select id="historyView">
+      <option value="ALL">All closed + awarded</option>
+      <option value="AWARDED">Awarded only</option>
+      <option value="CLOSED">Closed only</option>
+    </select>
+    <button onclick="loadHistory()">Refresh</button>
+  </section>
+
+  <section class="history-panel">
+    <div class="history-head">
+      <strong>Closed Tender History</strong>
+      <small id="historyMeta">Loading KPPP history…</small>
+    </div>
+    <div class="history-table-wrap">
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Tender</th>
+            <th>Department / City</th>
+            <th>Estimated Value</th>
+            <th>Closed</th>
+            <th>KPPP Status</th>
+            <th>Result / Contractor</th>
+          </tr>
+        </thead>
+        <tbody id="historyBody">
+          <tr><td colspan="7" class="history-empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="history-pages">
+      <button id="newerPage">← Newer</button>
+      <button id="olderPage">Older →</button>
+    </div>
+  </section>
+
+  <section class="contractor-panel">
+    <h3>🔎 Contractor Search</h3>
+    <p style="color:#64748b;font-size:12px">Contractor names appear only when a verified public award/AOC record is found. KPPP remains the official status source.</p>
+    <input id="contractorSearch" style="width:100%;height:42px;border:1px solid #cbd5e1;border-radius:8px;padding:0 11px" placeholder="Type contractor / company name…">
+    <div class="contractor-results" id="contractorResults"></div>
+  </section>
+</main>
+
+<script src="/history.js?v=6" defer></script>
+</body>
+</html>

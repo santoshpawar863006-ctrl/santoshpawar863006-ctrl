@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Admin · User Management</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/auth.css?v=20260814a">
+<link rel="stylesheet" href="/admin.css?v=20260814a">
+<script src="/auth-client.js?v=20260814a"></script>
+</head>
+<body class="admin-body">
+<header class="admin-top">
+  <div class="admin-top-inner">
+    <div>
+      <div class="admin-eyebrow">Administration</div>
+      <h1>User management</h1>
+      <p>Add, deactivate, or reset contractor access to Karnataka Tender Intelligence.</p>
+    </div>
+    <div class="admin-top-actions">
+      <a href="/">← Back to tenders</a>
+    </div>
+  </div>
+</header>
+
+<main class="admin-shell">
+  <section class="admin-card">
+    <div class="admin-card-head">
+      <h2>Create user</h2>
+      <p>New accounts can sign in immediately after you save them.</p>
+    </div>
+    <form id="createUserForm" class="admin-form">
+      <div class="admin-grid">
+        <label>Full name<input id="newName" required placeholder="e.g. Ramesh Contractor"></label>
+        <label>Username<input id="newUsername" required minlength="3" placeholder="e.g. ramesh"></label>
+        <label>Password<input id="newPassword" type="password" required minlength="8" placeholder="Min 8 characters"></label>
+        <label>Role
+          <select id="newRole">
+            <option value="user">Contractor</option>
+            <option value="admin">Admin</option>
+          </select>
+        </label>
+      </div>
+      <button type="submit" class="admin-primary">Add user</button>
+      <div class="admin-status" id="createStatus"></div>
+    </form>
+  </section>
+
+  <section class="admin-card">
+    <div class="admin-card-head">
+      <h2>Existing users</h2>
+      <button type="button" class="admin-secondary" id="refreshUsersBtn">Refresh</button>
+    </div>
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Role</th>
+            <th>Status</th>
+            <th>Password</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="usersBody"><tr><td colspan="5">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="admin-status" id="listStatus"></div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+
+  async function boot() {
+    const user = await KPPPAuth.requireAuth();
+    if (!user) return;
+    if (user.role !== 'admin') {
+      alert('Admin access required.');
+      location.replace('/');
+      return;
+    }
+    KPPPAuth.installUserMenu(user);
+    await loadUsers();
+  }
+
+  async function loadUsers() {
+    const body = document.getElementById('usersBody');
+    const status = document.getElementById('listStatus');
+    status.textContent = '';
+    try {
+      const { response, data } = await KPPPAuth.api('/api/admin/users');
+      if (!response.ok || !data?.success) throw new Error(data?.message || 'Failed to load users');
+      const me = KPPPAuth.getUser();
+      if (!data.users.length) {
+        body.innerHTML = '<tr><td colspan="5">No users yet.</td></tr>';
+        return;
+      }
+      body.innerHTML = data.users.map(u => `
+        <tr data-id="${esc(u.id)}">
+          <td>
+            <strong>${esc(u.name || u.username)}</strong>
+            <div class="muted">@${esc(u.username)}</div>
+          </td>
+          <td><span class="pill ${u.role}">${esc(u.role)}</span></td>
+          <td><span class="pill ${u.active ? 'active' : 'inactive'}">${u.active ? 'Active' : 'Inactive'}</span></td>
+          <td>
+            <div class="pwd-row">
+              <input type="password" class="pwd-input" placeholder="New password" minlength="8">
+              <button type="button" class="admin-secondary" data-action="password">Reset</button>
+            </div>
+          </td>
+          <td class="actions">
+            <button type="button" class="admin-secondary" data-action="toggle">${u.active ? 'Deactivate' : 'Activate'}</button>
+            <button type="button" class="admin-danger" data-action="delete" ${me && me.username === u.username ? 'disabled' : ''}>Remove</button>
+          </td>
+        </tr>`).join('');
+    } catch (err) {
+      body.innerHTML = `<tr><td colspan="5">${esc(err.message)}</td></tr>`;
+    }
+  }
+
+  document.getElementById('createUserForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const status = document.getElementById('createStatus');
+    status.textContent = '';
+    try {
+      const { response, data } = await KPPPAuth.api('/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: document.getElementById('newName').value.trim(),
+          username: document.getElementById('newUsername').value.trim(),
+          password: document.getElementById('newPassword').value,
+          role: document.getElementById('newRole').value
+        })
+      });
+      if (!response.ok || !data?.success) throw new Error(data?.message || 'Could not create user');
+      status.className = 'admin-status ok';
+      status.textContent = `Created @${data.user.username}`;
+      e.target.reset();
+      await loadUsers();
+    } catch (err) {
+      status.className = 'admin-status';
+      status.textContent = err.message;
+    }
+  });
+
+  document.getElementById('refreshUsersBtn').addEventListener('click', loadUsers);
+
+  document.getElementById('usersBody').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-action]');
+    const row = e.target.closest('tr[data-id]');
+    if (!btn || !row) return;
+    const id = row.dataset.id;
+    const status = document.getElementById('listStatus');
+    status.className = 'admin-status';
+    status.textContent = '';
+    try {
+      if (btn.dataset.action === 'password') {
+        const password = row.querySelector('.pwd-input')?.value || '';
+        if (password.length < 8) throw new Error('Password must be at least 8 characters');
+        const { response, data } = await KPPPAuth.api('/api/admin/users/' + encodeURIComponent(id), {
+          method: 'PATCH',
+          body: JSON.stringify({ password })
+        });
+        if (!response.ok || !data?.success) throw new Error(data?.message || 'Password reset failed');
+        row.querySelector('.pwd-input').value = '';
+        status.className = 'admin-status ok';
+        status.textContent = 'Password updated.';
+      }
+      if (btn.dataset.action === 'toggle') {
+        const active = btn.textContent.trim().toLowerCase() === 'activate';
+        const { response, data } = await KPPPAuth.api('/api/admin/users/' + encodeURIComponent(id), {
+          method: 'PATCH',
+          body: JSON.stringify({ active })
+        });
+        if (!response.ok || !data?.success) throw new Error(data?.message || 'Update failed');
+        await loadUsers();
+      }
+      if (btn.dataset.action === 'delete') {
+        if (!confirm('Remove this user permanently?')) return;
+        const { response, data } = await KPPPAuth.api('/api/admin/users/' + encodeURIComponent(id), { method: 'DELETE' });
+        if (!response.ok || !data?.success) throw new Error(data?.message || 'Delete failed');
+        await loadUsers();
+        status.className = 'admin-status ok';
+        status.textContent = 'User removed.';
+      }
+    } catch (err) {
+      status.textContent = err.message;
+    }
+  });
+
+  boot();
+})();
+</script>
+</body>
+</html>
