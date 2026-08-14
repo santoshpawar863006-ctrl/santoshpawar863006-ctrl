@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Sign in · Karnataka Tender Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/auth.css?v=20260814a">
+<script src="/auth-client.js?v=20260814a"></script>
+</head>
+<body>
+<div class="auth-shell">
+  <section class="auth-visual">
+    <div class="auth-brand-mark"><span></span> Karnataka Tender Intelligence</div>
+    <h1>Contractor decision room for KPPP tenders</h1>
+    <p>Secure access to live Karnataka WORKS, GOODS and SERVICES tenders, bid planning, and verified public enrichment — built for serious contractors.</p>
+    <div class="auth-points">
+      <div><div><strong>Live tender desk</strong><span>Filter, compare and track closing windows across departments.</span></div></div>
+      <div><div><strong>Bid calculator</strong><span>Model site cost, break-even and target margin with Claude-assisted planning.</span></div></div>
+      <div><div><strong>Admin-controlled access</strong><span>Only authorised contractor accounts can enter the workspace.</span></div></div>
+    </div>
+  </section>
+  <section class="auth-panel">
+    <form class="auth-card" id="loginForm">
+      <h2>Sign in</h2>
+      <p class="lede">Enter your contractor credentials issued by your administrator.</p>
+      <div class="auth-field">
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" required placeholder="admin">
+      </div>
+      <div class="auth-field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="••••••••">
+      </div>
+      <button class="auth-submit" type="submit" id="loginBtn">Continue to workspace</button>
+      <div class="auth-status" id="loginStatus" aria-live="polite"></div>
+      <div class="auth-footnote">Default local admin credentials are listed in <code>ADMIN-CREDENTIALS.md</code>. Change them before any shared or production use.</div>
+    </form>
+  </section>
+</div>
+<script>
+(() => {
+  if (KPPPAuth.getToken()) {
+    location.replace('/');
+    return;
+  }
+  const params = new URLSearchParams(location.search);
+  const next = params.get('next') || '/';
+  const form = document.getElementById('loginForm');
+  const status = document.getElementById('loginStatus');
+  const btn = document.getElementById('loginBtn');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    status.className = 'auth-status';
+    status.textContent = '';
+    btn.disabled = true;
+    btn.textContent = 'Signing in…';
+    try {
+      await KPPPAuth.login(
+        document.getElementById('username').value.trim(),
+        document.getElementById('password').value
+      );
+      status.className = 'auth-status ok';
+      status.textContent = 'Signed in. Opening workspace…';
+      location.replace(next.startsWith('/') ? next : '/');
+    } catch (err) {
+      status.textContent = err.message || 'Sign-in failed';
+      btn.disabled = false;
+      btn.textContent = 'Continue to workspace';
+    }
+  });
+})();
+</script>
+</body>
+</html>
