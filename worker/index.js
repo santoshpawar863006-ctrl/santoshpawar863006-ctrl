@@ -883,10 +883,19 @@ export default {
       ctx.waitUntil(ensureAdminSeeded(env).catch(() => {}));
     }
 
-    if (url.pathname.startsWith('/api/auth') || url.pathname.startsWith('/api/admin')) {
-      const handled = await handleAuthRoutes(request, env, url);
-      if (handled) return handled;
-      return json({ success: false, message: 'Auth route not found.' }, 404);
+    // Auth/admin APIs must always be handled by the Worker (never static assets).
+    const path = url.pathname.replace(/\/+$/, '') || '/';
+    if (path.startsWith('/api/auth') || path.startsWith('/api/admin')) {
+      try {
+        const handled = await handleAuthRoutes(request, env, url);
+        if (handled) return handled;
+        return json({ success: false, message: 'Auth route not found.' }, 404);
+      } catch (err) {
+        return json({
+          success: false,
+          message: 'Auth handler error: ' + (err && err.message ? err.message : 'unknown')
+        }, 500);
+      }
     }
 
     if (url.pathname === '/api/bid_calculator' && request.method === 'POST') {

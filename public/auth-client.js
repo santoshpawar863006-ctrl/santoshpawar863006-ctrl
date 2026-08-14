@@ -111,14 +111,20 @@
   }
 
   async function login(username, password) {
-    const { response, data } = await api('/api/auth/login', {
+    const response = await fetch('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ username, password })
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ username, password }),
+      cache: 'no-store'
     });
-    if (!response.ok || !data?.success || !data.token) {
-      if (!data) {
-        throw new Error('Sign-in failed (no API response). Confirm /api/auth/login is served by the Worker, not static assets.');
-      }
+    const raw = await response.text();
+    let data = null;
+    try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
+    if (!data) {
+      const hint = raw ? raw.replace(/\s+/g, ' ').slice(0, 120) : '(empty body)';
+      throw new Error('Sign-in failed (HTTP ' + response.status + ', non-JSON). ' + hint);
+    }
+    if (!response.ok || !data.success || !data.token) {
       throw new Error(data.message || ('Sign-in failed (HTTP ' + response.status + ')'));
     }
     setSession(data.token, data.user);

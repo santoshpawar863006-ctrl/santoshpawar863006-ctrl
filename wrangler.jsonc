@@ -6,11 +6,8 @@
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    "run_worker_first": [
-      "/api/*",
-      "/tenders.json",
-      "/health.json"
-    ]
+    // Always invoke the Worker first so /api/* never falls through to static HTML.
+    "run_worker_first": true
   },
   "kv_namespaces": [
     {
