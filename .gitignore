@@ -1,0 +1,9 @@
+.env
+.env.*
+.dev.vars
+__pycache__/
+*.pyc
+.DS_Store
+node_modules/
+.wrangler/
+functions._legacy_pages/

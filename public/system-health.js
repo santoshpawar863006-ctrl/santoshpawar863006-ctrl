@@ -97,16 +97,20 @@
       const age = db.age_hours;
       const kppp = h.kppp || {};
       const tk = h.tenderkart || {};
+      const anthropic = h.anthropic || {};
+      const secrets = h.secrets || {};
 
       grid.innerHTML = `
         <div class="health-card"><span>Overall</span>${statusText(h.overall === 'healthy','Healthy','Needs attention')}<small>Database + KPPP live connection</small></div>
+        <div class="health-card"><span>Claude API</span>${statusText(!!anthropic.configured, 'Configured', 'Missing key')}<small>${anthropic.note || (anthropic.configured ? 'ANTHROPIC_API_KEY bound' : 'Open /api/debug/env on this host')}</small></div>
         <div class="health-card"><span>KPPP Connection</span>${statusText(!!kppp.ok)}<small>${kppp.reported_works ? `KPPP currently reports ${Number(kppp.reported_works).toLocaleString('en-IN')} WORKS` : `HTTP ${kppp.http || 'unavailable'}`}</small></div>
         <div class="health-card"><span>Tender Database</span>${statusText(!!db.ok, db.status === 'fresh' ? 'Fresh' : 'Available', 'Stale')}<small>${Number(db.count || 0).toLocaleString('en-IN')} tenders • ${fmtAge(age)}</small></div>
-        <div class="health-card"><span>TenderKart</span>${statusText(!!tk.ok)}<small>Public enrichment API • HTTP ${tk.http || 'unavailable'}</small></div>
+        <div class="health-card"><span>TenderKart</span>${statusText(!!tk.ok)}<small>${tk.blocked_by_bot_protection ? 'Blocked by bot protection on Cloudflare' : `Public enrichment API • HTTP ${tk.http || 'unavailable'}`}</small></div>
         <div class="health-card"><span>WORKS</span><strong>${Number(counts.WORKS || 0).toLocaleString('en-IN')}</strong><small>Last good database</small></div>
         <div class="health-card"><span>GOODS</span><strong>${Number(counts.GOODS || 0).toLocaleString('en-IN')}</strong><small>Last good database</small></div>
         <div class="health-card"><span>SERVICES</span><strong>${Number(counts.SERVICES || 0).toLocaleString('en-IN')}</strong><small>Last good database</small></div>
         <div class="health-card"><span>Collector Protection</span><strong class="health-ok">✓ Protected</strong><small>Zero-result and abnormal count changes are blocked before Git commit.${collector.previous_count ? ` Previous total: ${Number(collector.previous_count).toLocaleString('en-IN')}.` : ''}</small></div>
+        <div class="health-card"><span>Secret Bindings</span><strong class="${secrets.ANTHROPIC_API_KEY ? 'health-ok' : 'health-bad'}">${secrets.ANTHROPIC_API_KEY ? '✓ Claude' : '⚠ Claude'} · ${secrets.ADMIN_PASSWORD ? '✓ Admin' : '⚠ Admin'}</strong><small>env keys: ${(secrets.env_keys || []).join(', ') || 'none'}</small></div>
         <div class="health-card"><span>BidAssist</span><strong class="health-warn">Search based</strong><small>Checked only when you press the BidAssist button.</small></div>
         <div class="health-card"><span>TendersPlus</span><strong class="health-warn">Search based</strong><small>Checked only when you press the TendersPlus button.</small></div>`;
 

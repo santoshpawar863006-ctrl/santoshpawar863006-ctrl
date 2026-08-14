@@ -23,6 +23,33 @@ const JSON_HEADERS = {
   'Accept-Language': 'en-IN,en;q=0.9'
 };
 
+function getSecret(env, ...names) {
+  for (const name of names) {
+    const raw = env?.[name];
+    if (raw === undefined || raw === null) continue;
+    let value = String(raw).trim();
+    // Dashboard pastes sometimes include wrapping quotes.
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1).trim();
+    }
+    if (value) return value;
+  }
+  return '';
+}
+
+function secretPresence(env) {
+  return {
+    ANTHROPIC_API_KEY: Boolean(getSecret(env, 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY', 'ANTHROPIC_KEY')),
+    ADMIN_USERNAME: Boolean(getSecret(env, 'ADMIN_USERNAME')),
+    ADMIN_PASSWORD: Boolean(getSecret(env, 'ADMIN_PASSWORD')),
+    ADMIN_NAME: Boolean(getSecret(env, 'ADMIN_NAME')),
+    SESSION_SECRET: Boolean(getSecret(env, 'SESSION_SECRET')),
+    AUTH_STORE: Boolean(env?.AUTH_STORE),
+    ASSETS: Boolean(env?.ASSETS),
+    env_keys: Object.keys(env || {}).sort()
+  };
+}
+
 function json(payload, status = 200, cache = 'no-store') {
   return new Response(JSON.stringify(payload), {
     status,
@@ -181,7 +208,13 @@ async function getTenderKartDetail(tenderRef, title = '', department = '') {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     let response;
     try {
-      response = await fetch(url, { headers: { ...JSON_HEADERS, Referer: TENDERKART_BASE + '/tenders/filters' } });
+      response = await fetch(url, {
+        headers: {
+          ...JSON_HEADERS,
+          Origin: TENDERKART_BASE,
+          Referer: TENDERKART_BASE + '/tenders/filters'
+        }
+      });
     } catch (error) {
       attempts.push({ source: 'TenderKart', method: 'public API', error: String(error).slice(0, 100) });
       continue;
@@ -520,7 +553,13 @@ async function systemHealth(ctx, env = {}) {
         u.searchParams.set('keywords', 'Karnataka');
         u.searchParams.set('state', 'Karnataka');
         u.searchParams.set('limit', '1');
-        const response = await fetch(u, { headers: JSON_HEADERS });
+        const response = await fetch(u, {
+          headers: {
+            ...JSON_HEADERS,
+            Origin: TENDERKART_BASE,
+            Referer: TENDERKART_BASE + '/tenders/filters'
+          }
+        });
         let valid = false;
         let challenge = false;
         if (response.ok) {
@@ -541,7 +580,7 @@ async function systemHealth(ctx, env = {}) {
     })()
   ]);
 
-  const anthropicConfigured = Boolean(String(env.ANTHROPIC_API_KEY || env.CLAUDE_API_KEY || '').trim());
+  const anthropicConfigured = Boolean(getSecret(env, 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY', 'ANTHROPIC_KEY'));
 
   return json({
     success: true,
@@ -554,11 +593,12 @@ async function systemHealth(ctx, env = {}) {
       configured: anthropicConfigured,
       note: anthropicConfigured
         ? 'ANTHROPIC_API_KEY is present on this Worker.'
-        : 'ANTHROPIC_API_KEY is missing. Add it under Worker → Settings → Variables and Secrets (Encrypt), not only as a Build variable.'
+        : 'ANTHROPIC_API_KEY is missing on THIS Worker script. Open the Worker that serves your *.workers.dev URL → Settings → Variables and Secrets. Build variables do not count. If the Worker name differs from karnataka-tender-intelligence, secrets must be on that named Worker.'
     },
+    secrets: secretPresence(env),
     bidassist: { status: 'search_based', note: 'Checked only when a tender search is requested.' },
     tendersplus: { status: 'search_based', note: 'Checked only when a tender search is requested.' },
-    hosting: { platform: 'Cloudflare Workers', live_data_source: 'GitHub hourly collector' }
+    hosting: { platform: 'Cloudflare Workers', live_data_source: 'GitHub hourly collector + deployed assets fallback' }
   }, 200, 'public, max-age=60, s-maxage=60');
 }
 
@@ -652,7 +692,7 @@ function defaultAssumptions(category, emd) {
 }
 
 async function askClaudeForAssumptions(env, tender) {
-  const apiKey = String(env.ANTHROPIC_API_KEY || env.CLAUDE_API_KEY || '').trim();
+  const apiKey = getSecret(env, 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY', 'ANTHROPIC_KEY');
   if (!apiKey) {
     return {
       assumptions: defaultAssumptions(tender.category, tender.emd),
@@ -836,11 +876,11 @@ async function bidAsk(request, env) {
     return json({ success: false, message: 'Question is too long. Keep it under 2000 characters.' }, 400);
   }
 
-  const apiKey = String(env.ANTHROPIC_API_KEY || env.CLAUDE_API_KEY || '').trim();
+  const apiKey = getSecret(env, 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY', 'ANTHROPIC_KEY');
   if (!apiKey) {
     return json({
       success: false,
-      message: 'ANTHROPIC_API_KEY not set on this Worker. Add it under Worker → Settings → Variables and Secrets (Encrypt).'
+      message: 'ANTHROPIC_API_KEY not set on this Worker. Add it under Worker → Settings → Variables and Secrets (Encrypt). Check /api/debug/env to see which bindings this script has.'
     }, 503);
   }
 
@@ -957,6 +997,16 @@ export default {
 
     // Auth/admin APIs must always be handled by the Worker (never static assets).
     const path = url.pathname.replace(/\/+$/, '') || '/';
+
+    // Public diagnostic: which env bindings exist (values never returned).
+    if (path === '/api/debug/env' && request.method === 'GET') {
+      return json({
+        success: true,
+        worker_hint: 'If ANTHROPIC_API_KEY is false here, the secret is not bound to THIS Worker script. Set it on the Worker that matches your live URL.',
+        secrets: secretPresence(env)
+      });
+    }
+
     if (path.startsWith('/api/auth') || path.startsWith('/api/admin')) {
       try {
         const handled = await handleAuthRoutes(request, env, url);
