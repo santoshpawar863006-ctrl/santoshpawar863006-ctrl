@@ -447,22 +447,23 @@ async function proxyRaw(filename, ctx, ttl = 60, env = null) {
   let response = await cache.match(cacheKey);
   if (response) return response;
 
+  const headersFor = (source) => new Headers({
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': `public, max-age=${ttl}, s-maxage=${ttl}`,
+    'Access-Control-Allow-Origin': '*',
+    'X-KPPP-Data-Source': source
+  });
+
+  // Stream the large tenders.json — do NOT JSON.parse the whole ~9MB body (CPU/memory limit).
   const tryUpstream = async (sourceUrl) => {
     const upstream = await fetch(sourceUrl, {
       headers: { Accept: 'application/json' },
       cf: { cacheEverything: true, cacheTtl: ttl }
     });
     if (!upstream.ok) return null;
-    const text = await upstream.text();
-    if (!text || text.trim().startsWith('<')) return null;
-    try { JSON.parse(text); } catch { return null; }
-    const headers = new Headers({
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': `public, max-age=${ttl}, s-maxage=${ttl}`,
-      'Access-Control-Allow-Origin': '*',
-      'X-KPPP-Data-Source': sourceUrl
-    });
-    return new Response(text, { status: 200, headers });
+    const ctype = String(upstream.headers.get('content-type') || '');
+    if (ctype.includes('text/html')) return null;
+    return new Response(upstream.body, { status: 200, headers: headersFor(sourceUrl) });
   };
 
   for (const base of RAW_BASES) {
@@ -476,18 +477,10 @@ async function proxyRaw(filename, ctx, ttl = 60, env = null) {
     try {
       const assetResp = await env.ASSETS.fetch(new Request(`https://assets.local/${filename}`));
       if (assetResp.ok) {
-        const text = await assetResp.text();
-        if (text && !text.trim().startsWith('<')) {
-          response = new Response(text, {
-            status: 200,
-            headers: {
-              'Content-Type': 'application/json; charset=utf-8',
-              'Cache-Control': `public, max-age=${ttl}, s-maxage=${ttl}`,
-              'Access-Control-Allow-Origin': '*',
-              'X-KPPP-Data-Source': 'assets'
-            }
-          });
-        }
+        response = new Response(assetResp.body, {
+          status: 200,
+          headers: headersFor('assets')
+        });
       }
     } catch {}
   }
