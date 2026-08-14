@@ -2,7 +2,11 @@
 
 import { handleAuthRoutes, requireAuthOrError, ensureAdminSeeded } from './auth.js';
 
-const RAW_BASE = 'https://raw.githubusercontent.com/santoshpawar863006-ctrl/KPPP-NEEWWW/main/public';
+const RAW_BASES = [
+  'https://raw.githubusercontent.com/santoshpawar863006-ctrl/KPPP-NEEWWW/main/public',
+  'https://raw.githubusercontent.com/santoshpawar863006-ctrl/kppp/main/public'
+];
+const RAW_BASE = RAW_BASES[0];
 const KPPP_BASE = 'https://kppp.karnataka.gov.in';
 const KPPP_WORKS = KPPP_BASE + '/supplier-registration-service/v1/api/portal-service/works/search-eproc-tenders';
 const TENDERKART_BASE = 'https://tenderkart.in';
@@ -183,7 +187,18 @@ async function getTenderKartDetail(tenderRef, title = '', department = '') {
       continue;
     }
     attempts.push({ source: 'TenderKart', method: 'public API', http: response.status, query: 'keywords' });
-    if (!response.ok) continue;
+    if (!response.ok) {
+      const peek = await response.clone().text().catch(() => '');
+      if (/just a moment|cf-browser-verification|challenge-platform/i.test(peek)) {
+        attempts.push({
+          source: 'TenderKart',
+          method: 'public API',
+          error: 'Blocked by bot/challenge page (common on Cloudflare Workers). Localhost may still work via cache or different network path.'
+        });
+        break;
+      }
+      continue;
+    }
     let payload;
     try { payload = await response.json(); } catch { continue; }
     const rows = Array.isArray(payload?.data) ? payload.data : [];
@@ -393,21 +408,59 @@ async function lookupPublicDetails(url) {
   }, 200, 'public, max-age=3600, s-maxage=3600');
 }
 
-async function proxyRaw(filename, ctx, ttl = 60) {
-  const sourceUrl = `${RAW_BASE}/${filename}`;
+async function proxyRaw(filename, ctx, ttl = 60, env = null) {
   const cache = caches.default;
-  const cacheKey = new Request(sourceUrl, { method: 'GET' });
+  const cacheKey = new Request(`https://kppp-data.local/${filename}`, { method: 'GET' });
   let response = await cache.match(cacheKey);
-  if (!response) {
-    const upstream = await fetch(sourceUrl, { headers: { Accept: 'application/json' }, cf: { cacheEverything: true, cacheTtl: ttl } });
-    if (!upstream.ok) return json({ success: false, message: `${filename} is temporarily unavailable.` }, 502);
-    const headers = new Headers(upstream.headers);
-    headers.set('Content-Type', 'application/json; charset=utf-8');
-    headers.set('Cache-Control', `public, max-age=${ttl}, s-maxage=${ttl}`);
-    headers.set('Access-Control-Allow-Origin', '*');
-    response = new Response(upstream.body, { status: upstream.status, headers });
-    ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  if (response) return response;
+
+  const tryUpstream = async (sourceUrl) => {
+    const upstream = await fetch(sourceUrl, {
+      headers: { Accept: 'application/json' },
+      cf: { cacheEverything: true, cacheTtl: ttl }
+    });
+    if (!upstream.ok) return null;
+    const text = await upstream.text();
+    if (!text || text.trim().startsWith('<')) return null;
+    try { JSON.parse(text); } catch { return null; }
+    const headers = new Headers({
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': `public, max-age=${ttl}, s-maxage=${ttl}`,
+      'Access-Control-Allow-Origin': '*',
+      'X-KPPP-Data-Source': sourceUrl
+    });
+    return new Response(text, { status: 200, headers });
+  };
+
+  for (const base of RAW_BASES) {
+    try {
+      response = await tryUpstream(`${base}/${filename}?ts=${Date.now()}`);
+      if (response) break;
+    } catch {}
   }
+
+  if (!response && env?.ASSETS) {
+    try {
+      const assetResp = await env.ASSETS.fetch(new Request(`https://assets.local/${filename}`));
+      if (assetResp.ok) {
+        const text = await assetResp.text();
+        if (text && !text.trim().startsWith('<')) {
+          response = new Response(text, {
+            status: 200,
+            headers: {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': `public, max-age=${ttl}, s-maxage=${ttl}`,
+              'Access-Control-Allow-Origin': '*',
+              'X-KPPP-Data-Source': 'assets'
+            }
+          });
+        }
+      }
+    } catch {}
+  }
+
+  if (!response) return json({ success: false, message: `${filename} is temporarily unavailable.` }, 502);
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
   return response;
 }
 
@@ -417,7 +470,7 @@ function ageHours(value) {
   return Math.max(0, (Date.now() - ms) / 3600000);
 }
 
-async function systemHealth(ctx) {
+async function systemHealth(ctx, env = {}) {
   let snapshot = {};
   try {
     const response = await fetch(`${RAW_BASE}/health.json?ts=${Date.now()}`, { headers: { Accept: 'application/json' }, cf: { cacheTtl: 30 } });
@@ -469,13 +522,26 @@ async function systemHealth(ctx) {
         u.searchParams.set('limit', '1');
         const response = await fetch(u, { headers: JSON_HEADERS });
         let valid = false;
+        let challenge = false;
         if (response.ok) {
           try { const p = await response.json(); valid = Array.isArray(p?.data); } catch {}
+        } else {
+          const peek = await response.clone().text().catch(() => '');
+          challenge = /just a moment|cf-browser-verification|challenge-platform/i.test(peek);
         }
-        return { ok: response.ok && valid, http: response.status };
+        return {
+          ok: response.ok && valid,
+          http: response.status,
+          blocked_by_bot_protection: challenge,
+          note: challenge
+            ? 'TenderKart is returning a bot/challenge page to the Worker. Enrichment may fail on Cloudflare even when it works on localhost.'
+            : undefined
+        };
       } catch (error) { return { ok: false, error: String(error).slice(0, 160) }; }
     })()
   ]);
+
+  const anthropicConfigured = Boolean(String(env.ANTHROPIC_API_KEY || env.CLAUDE_API_KEY || '').trim());
 
   return json({
     success: true,
@@ -484,6 +550,12 @@ async function systemHealth(ctx) {
     database,
     kppp,
     tenderkart,
+    anthropic: {
+      configured: anthropicConfigured,
+      note: anthropicConfigured
+        ? 'ANTHROPIC_API_KEY is present on this Worker.'
+        : 'ANTHROPIC_API_KEY is missing. Add it under Worker → Settings → Variables and Secrets (Encrypt), not only as a Build variable.'
+    },
     bidassist: { status: 'search_based', note: 'Checked only when a tender search is requested.' },
     tendersplus: { status: 'search_based', note: 'Checked only when a tender search is requested.' },
     hosting: { platform: 'Cloudflare Workers', live_data_source: 'GitHub hourly collector' }
@@ -585,7 +657,7 @@ async function askClaudeForAssumptions(env, tender) {
     return {
       assumptions: defaultAssumptions(tender.category, tender.emd),
       ai_used: false,
-      ai_message: 'ANTHROPIC_API_KEY not set. Add it to .dev.vars and restart wrangler. Using category defaults.'
+      ai_message: 'ANTHROPIC_API_KEY not set on this Worker. In Cloudflare: Worker → Settings → Variables and Secrets → add ANTHROPIC_API_KEY (Encrypt). Build variables do not count. Using category defaults.'
     };
   }
 
@@ -637,7 +709,7 @@ Be practical for Karnataka site conditions. Do not invent fake BOQ line items. N
         detail = String(errJson?.error?.message || errJson?.message || detail).slice(0, 220);
       } catch {}
       let hint = `Claude HTTP ${response.status}. Using defaults. ${detail}`;
-      if (response.status === 401) hint = 'Claude rejected the API key (401). Check ANTHROPIC_API_KEY in .dev.vars, then restart wrangler.';
+      if (response.status === 401) hint = 'Claude rejected the API key (401). Recreate ANTHROPIC_API_KEY under Worker → Settings → Variables and Secrets.';
       if (response.status === 403) hint = `Claude access forbidden (403). Check plan/billing for the API key. ${detail}`;
       if (response.status === 429) hint = `Claude rate limit / quota (429). Check console.anthropic.com usage/billing, then retry. ${detail}`;
       return {
@@ -768,7 +840,7 @@ async function bidAsk(request, env) {
   if (!apiKey) {
     return json({
       success: false,
-      message: 'ANTHROPIC_API_KEY not set. Add it to .dev.vars and restart wrangler.'
+      message: 'ANTHROPIC_API_KEY not set on this Worker. Add it under Worker → Settings → Variables and Secrets (Encrypt).'
     }, 503);
   }
 
@@ -845,7 +917,7 @@ Prefer short paragraphs or bullet points.`;
         detail = String(errJson?.error?.message || errJson?.message || detail).slice(0, 220);
       } catch {}
       let message = `Claude HTTP ${response.status}. ${detail}`;
-      if (response.status === 401) message = 'Claude rejected the API key (401). Check ANTHROPIC_API_KEY in .dev.vars.';
+      if (response.status === 401) message = 'Claude rejected the API key (401). Recreate ANTHROPIC_API_KEY under Worker → Settings → Variables and Secrets.';
       if (response.status === 429) message = `Claude rate limit / quota (429). ${detail}`;
       return json({ success: false, message }, response.status === 401 ? 401 : 502);
     }
@@ -914,13 +986,13 @@ export default {
     if (url.pathname === '/tenders.json') {
       const denied = await requireAuthOrError(request, env);
       if (denied) return denied;
-      return proxyRaw('tenders.json', ctx, 60);
+      return proxyRaw('tenders.json', ctx, 60, env);
     }
-    if (url.pathname === '/health.json') return proxyRaw('health.json', ctx, 30);
+    if (url.pathname === '/health.json') return proxyRaw('health.json', ctx, 30, env);
     if (url.pathname === '/api/system_health') {
       const denied = await requireAuthOrError(request, env);
       if (denied) return denied;
-      return systemHealth(ctx);
+      return systemHealth(ctx, env);
     }
     if (url.pathname === '/api/public_tender_detail') {
       const denied = await requireAuthOrError(request, env);

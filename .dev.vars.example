@@ -1,0 +1,13 @@
+# Copy to .dev.vars for local wrangler testing.
+# Never commit .dev.vars.
+
+ANTHROPIC_API_KEY=sk-ant-your-claude-api-key-here
+# ANTHROPIC_MODEL=claude-sonnet-4-5
+
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=Admin@KPPP2026!
+ADMIN_NAME=System Administrator
+SESSION_SECRET=replace-with-a-long-random-string
+
+# Optional one-time admin password reset from env:
+# ADMIN_RESET=true

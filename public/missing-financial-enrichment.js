@@ -93,7 +93,7 @@
     try {
       const params = new URLSearchParams({ tender: task.ref, source: 'tenderkart' });
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 3500);
+      const timer = setTimeout(() => controller.abort(), 12000);
       let response;
       try {
         response = await fetch('/api/public_tender_detail?' + params.toString(), { cache: 'no-store', signal: controller.signal });

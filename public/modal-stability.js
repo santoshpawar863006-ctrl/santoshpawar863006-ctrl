@@ -78,7 +78,7 @@
     if(sourceInflight.has(cacheKey)) return sourceInflight.get(cacheKey);
     const promise=(async()=>{
       const controller=new AbortController();
-      const timer=setTimeout(()=>controller.abort(),7000);
+      const timer=setTimeout(()=>controller.abort(),20000);
       try{
         const r=await fetch('/api/public_tender_detail?'+paramsFor(t,source).toString(),{cache:'no-store',signal:controller.signal});
         const data=r.ok ? await r.json() : {success:false,sources:[]};
