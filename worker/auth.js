@@ -2,6 +2,8 @@
 
 const USERS_KEY = 'auth:users:v1';
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
+// Avoid repeating KV seed work on every request within the same isolate.
+let seedOnce = null;
 
 function b64url(bytes) {
   let str = '';
@@ -92,36 +94,36 @@ async function ensureAdminSeeded(env) {
   if (!env.AUTH_STORE) {
     return { ok: false, message: 'AUTH_STORE not configured' };
   }
-  const store = await getUsers(env);
-  const adminUser = normalizeUsername(env.ADMIN_USERNAME || 'admin');
-  const adminPass = String(env.ADMIN_PASSWORD || 'Admin@KPPP2026!').trim();
-  const adminName = String(env.ADMIN_NAME || 'System Administrator').trim();
-  let changed = false;
-  let admin = store.users.find((u) => normalizeUsername(u.username) === adminUser);
+  // Reuse in-flight / completed seed for this isolate (except forced reset).
+  const forceReset = String(env.ADMIN_RESET || '').toLowerCase() === 'true';
+  if (!forceReset && seedOnce) return seedOnce;
 
-  if (!admin) {
-    const pwd = await hashPassword(adminPass);
-    admin = {
-      id: crypto.randomUUID(),
-      username: adminUser,
-      name: adminName,
-      role: 'admin',
-      active: true,
-      password_salt: pwd.salt,
-      password_hash: pwd.hash,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-    store.users.push(admin);
-    changed = true;
-  } else {
-    // Keep the bootstrap admin in sync with Worker secrets.
-    // Fixes production login when admin was first seeded before secrets were set,
-    // or when ADMIN_PASSWORD was changed in the Cloudflare dashboard.
-    const forceReset = String(env.ADMIN_RESET || '').toLowerCase() === 'true';
-    const envPasswordSet = Boolean(String(env.ADMIN_PASSWORD || '').trim());
-    const passwordMatches = envPasswordSet ? await verifyPassword(adminPass, admin) : true;
-    if (forceReset || (envPasswordSet && !passwordMatches)) {
+  const run = (async () => {
+    const store = await getUsers(env);
+    const adminUser = normalizeUsername(env.ADMIN_USERNAME || 'admin');
+    const adminPass = String(env.ADMIN_PASSWORD || 'Admin@KPPP2026!').trim();
+    const adminName = String(env.ADMIN_NAME || 'System Administrator').trim();
+    let changed = false;
+    let admin = store.users.find((u) => normalizeUsername(u.username) === adminUser);
+
+    if (!admin) {
+      // PBKDF2 is expensive — only when creating the bootstrap admin.
+      const pwd = await hashPassword(adminPass);
+      admin = {
+        id: crypto.randomUUID(),
+        username: adminUser,
+        name: adminName,
+        role: 'admin',
+        active: true,
+        password_salt: pwd.salt,
+        password_hash: pwd.hash,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      store.users.push(admin);
+      changed = true;
+    } else if (forceReset) {
+      // Only re-hash when ADMIN_RESET=true (do NOT verify password on every request).
       const pwd = await hashPassword(adminPass);
       admin.password_salt = pwd.salt;
       admin.password_hash = pwd.hash;
@@ -135,10 +137,18 @@ async function ensureAdminSeeded(env) {
       admin.updated_at = new Date().toISOString();
       changed = true;
     }
-  }
 
-  if (changed) await saveUsers(env, store);
-  return { ok: true, admin: publicUser(admin), seeded: changed };
+    if (changed) await saveUsers(env, store);
+    return { ok: true, admin: publicUser(admin), seeded: changed };
+  })();
+
+  if (!forceReset) seedOnce = run;
+  try {
+    return await run;
+  } catch (err) {
+    if (!forceReset) seedOnce = null;
+    throw err;
+  }
 }
 
 async function hmacSign(secret, data) {
@@ -193,6 +203,7 @@ function bearerToken(request) {
 }
 
 async function requireUser(request, env, { admin = false } = {}) {
+  // Seed only when needed; cached per isolate — never re-run PBKDF2 on every API call.
   await ensureAdminSeeded(env);
   const token = bearerToken(request);
   if (!token) return { error: json({ success: false, message: 'Authentication required.' }, 401) };
