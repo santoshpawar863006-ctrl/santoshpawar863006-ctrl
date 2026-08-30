@@ -1,0 +1,35 @@
+name: Build Contractor ERP V2 EXE
+
+on:
+  push:
+    branches: ["contractor-erp-build"]
+    paths:
+      - "contractor-erp/app_v2.py"
+      - "contractor-erp/db_v2.py"
+      - ".github/workflows/build-contractor-erp-v2.yml"
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6==6.8.2.1 pyinstaller==6.11.1
+      - name: Build V2 EXE
+        working-directory: contractor-erp
+        run: |
+          pyinstaller --noconfirm --clean --windowed --onefile --name "Contractor ERP V2" app_v2.py
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: Contractor-ERP-V2-Windows
+          path: contractor-erp/dist/Contractor ERP V2.exe
+          if-no-files-found: error
