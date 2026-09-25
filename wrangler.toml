@@ -1,4 +1,0 @@
-# Worker config lives in wrangler.jsonc (assets + AUTH_STORE KV).
-# Keep this file minimal so Cloudflare does not treat the project as Pages-only.
-name = "karnataka-tender-intelligence"
-compatibility_date = "2026-08-12"

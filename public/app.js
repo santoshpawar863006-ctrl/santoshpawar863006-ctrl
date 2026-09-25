@@ -1,324 +1,560 @@
 'use strict';
 
-const state = {
-  all: [],
-  filtered: [],
-  page: 1,
-  pageSize: 50,
-  saved: new Set(JSON.parse(localStorage.getItem('kppp_saved_tenders') || '[]')),
-  generatedAt: null,
-};
+(() => {
+  const DATA_URL = '/tenders-lite.json';
+  const CACHE_NAME = 'tenderone-data-v1';
+  const SAVED_KEY = 'kppp_saved_tenders';
+  const THEME_KEY = 'tenderone_theme';
+  const PAGE = 30;
+  const DAY = 86400000;
 
-const $ = (id) => document.getElementById(id);
-const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[c]));
-const num = (v) => { const n = Number(String(v ?? '').replace(/[₹,]/g, '').trim()); return Number.isFinite(n) ? n : null; };
-// KPPP leaves EMD/fee blank (not zero) when unpublished, so treat 0 as missing rather than ₹0.
-const money = (v, fallback='Refer tender') => { const n = num(v); return n === null || n <= 0 ? fallback : '₹' + n.toLocaleString('en-IN', {maximumFractionDigits: 2}); };
-const fmt = (v) => Number(v || 0).toLocaleString('en-IN');
-const text = (v, fallback='Not available') => (v === null || v === undefined || v === '') ? fallback : String(v);
-const first = (obj, keys, fallback=null) => { for (const k of keys) if (obj && obj[k] !== null && obj[k] !== undefined && obj[k] !== '') return obj[k]; return fallback; };
-const firstAcross = (objects, keys, fallback=null) => { for (const obj of objects) { const v=first(obj,keys,null); if(v!==null&&v!==undefined&&v!=='') return v; } return fallback; };
-const asArray = (v) => Array.isArray(v) ? v : [];
+  const $ = (id) => document.getElementById(id);
+  const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const num = (v) => (typeof v === 'number' && v > 0 ? v : null);
+  const fmtInt = (n) => Number(n || 0).toLocaleString('en-IN');
 
-const CITY_ALIASES = {
-  'Bengaluru':['bengaluru','bangalore'],'Mysuru':['mysuru','mysore'],'Vijayapura':['vijayapura','bijapur'],
-  'Bagalkot':['bagalkot'],'Belagavi':['belagavi','belgaum'],'Kalaburagi':['kalaburagi','gulbarga'],'Bidar':['bidar'],
-  'Yadgir':['yadgir'],'Raichur':['raichur'],'Koppal':['koppal'],'Ballari':['ballari','bellary'],'Gadag':['gadag'],
-  'Haveri':['haveri'],'Dharwad':['dharwad'],'Uttara Kannada':['uttara kannada','karwar'],'Udupi':['udupi'],
-  'Dakshina Kannada':['dakshina kannada','mangaluru','mangalore'],'Shivamogga':['shivamogga','shimoga'],
-  'Davangere':['davangere'],'Chitradurga':['chitradurga'],'Tumakuru':['tumakuru','tumkur'],
-  'Chikkamagaluru':['chikkamagaluru','chikmagalur'],'Hassan':['hassan'],'Kodagu':['kodagu','madikeri'],
-  'Mandya':['mandya'],'Chamarajanagar':['chamarajanagar'],'Ramanagara':['ramanagara','ramanagaram'],
-  'Kolar':['kolar'],'Chikkaballapur':['chikkaballapur','chikballapur']
-};
-
-function tenderKey(t){ return String(t.id || t.ref_no || `${t.title || ''}|${t.closing_date || ''}`); }
-function canonicalCity(value){
-  const s=String(value||'').trim(); if(!s) return '';
-  const low=s.toLowerCase();
-  for(const [city,aliases] of Object.entries(CITY_ALIASES)) if(aliases.some(a=>low.includes(a))) return city;
-  return '';
-}
-function detectCity(t){
-  const direct=canonicalCity(t.city); if(direct) return direct;
-  const district=canonicalCity(t.district); if(district) return district;
-  const location=canonicalCity(t.location); if(location) return location;
-  return 'Other / Unspecified';
-}
-function parseDate(v){
-  if (!v) return null;
-  const s = String(v).trim();
-  const m = s.match(/^(\d{2})-(\d{2})-(\d{4})(?:\s+(\d{2}):(\d{2})(?::(\d{2}))?)?$/);
-  if (m) return new Date(+m[3], +m[2]-1, +m[1], +(m[4]||0), +(m[5]||0), +(m[6]||0));
-  const d = new Date(s); return Number.isNaN(d.getTime()) ? null : d;
-}
-function closingSoon(v){ const d=parseDate(v); if(!d) return false; const ms=d-Date.now(); return ms>=0 && ms<=7*86400000; }
-
-async function loadTenders(){
-  try {
-    const r = await fetch('/tenders.json?ts=' + Date.now(), {cache:'no-store'});
-    if (!r.ok) throw new Error('Unable to load tenders.json');
-    const data = await r.json();
-    state.generatedAt = data.generated_at || null;
-    state.all = asArray(data.tenders).map(t => ({...t, derived_city: detectCity(t)}));
-    populateFilters();
-    applyFilters();
-    $('syncText').textContent = state.generatedAt ? `Last KPPP sync: ${new Date(state.generatedAt).toLocaleString('en-IN')}` : 'KPPP sync time unavailable';
-  } catch (e) {
-    $('tableBody').innerHTML = `<tr><td colspan="9" class="empty">⚠ ${esc(e.message)}</td></tr>`;
-    $('syncText').textContent = 'Tender database unavailable';
+  // ₹1.18 Cr / ₹25.4 L / ₹2,940 — how contractors read amounts.
+  function money(v, { full = false } = {}) {
+    const n = num(v);
+    if (n === null) return null;
+    if (full || n < 100000) return '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    if (n >= 10000000) return '₹' + (n / 10000000).toFixed(n >= 1e9 ? 0 : 2).replace(/\.?0+$/, '') + ' Cr';
+    return '₹' + (n / 100000).toFixed(1).replace(/\.0$/, '') + ' L';
   }
-}
+  const dateFmt = new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+  const shortDate = new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' });
 
-function populateFilters(){
-  fillSelect('cityFilter', [...new Set(state.all.map(t=>t.derived_city).filter(c=>c&&c!=='Other / Unspecified'))].sort(), 'All cities / districts');
-  fillSelect('deptFilter', [...new Set(state.all.map(t=>String(t.department||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b)), 'All departments');
-}
-function fillSelect(id, values, label){
-  const el=$(id); el.innerHTML=`<option value="ALL">${esc(label)}</option>` + values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
-}
-
-function applyFilters(){
-  const q=$('searchInput').value.trim().toLowerCase();
-  const cat=$('categoryFilter').value, city=$('cityFilter').value, dept=$('deptFilter').value;
-  state.filtered = state.all.filter(t => {
-    if (cat !== 'ALL' && String(t.category||'').toUpperCase() !== cat) return false;
-    if (city !== 'ALL' && t.derived_city !== city) return false;
-    if (dept !== 'ALL' && String(t.department||'') !== dept) return false;
-    if (q) {
-      const hay=[t.title,t.ref_no,t.id,t.department,t.location,t.district,t.city,t.derived_city,t.category,t.status,t.status_text].filter(Boolean).join(' ').toLowerCase();
-      if (!hay.includes(q)) return false;
+  function timeLeft(ms) {
+    if (!ms) return null;
+    const diff = ms - Date.now();
+    if (diff <= 0) return { label: 'Closed', tone: 'hot', days: -1 };
+    const days = diff / DAY;
+    if (days < 1) {
+      const h = Math.max(1, Math.round(diff / 3600000));
+      return { label: `${h} hr left`, tone: 'hot', days };
     }
-    return true;
-  });
-  sortFiltered(); state.page=1; render();
-}
-function sortFiltered(){
-  const mode=$('sortFilter').value;
-  state.filtered.sort((a,b)=>{
-    if(mode==='CLOSING') return (parseDate(a.closing_date)?.getTime() ?? Number.MAX_SAFE_INTEGER) - (parseDate(b.closing_date)?.getTime() ?? Number.MAX_SAFE_INTEGER);
-    if(mode==='AMOUNT') return (num(b.amount)??-1)-(num(a.amount)??-1);
-    return (parseDate(b.published_date)?.getTime()??0)-(parseDate(a.published_date)?.getTime()??0);
-  });
-}
-function updateStats(){
-  const cats = (c) => state.filtered.filter(t=>String(t.category||'').toUpperCase()===c).length;
-  $('statTotal').textContent=fmt(state.filtered.length);
-  $('statWorks').textContent=fmt(cats('WORKS'));
-  $('statGoods').textContent=fmt(cats('GOODS'));
-  $('statServices').textContent=fmt(cats('SERVICES'));
-  $('statSoon').textContent=fmt(state.filtered.filter(t=>closingSoon(t.closing_date)).length);
-  $('statSaved').textContent=fmt(state.saved.size);
-}
-function render(){ updateStats(); renderTable(); renderPagination(); $('resultCount').textContent=`${fmt(state.filtered.length)} tenders found`; }
-
-function renderTable(){
-  const start=(state.page-1)*state.pageSize, rows=state.filtered.slice(start,start+state.pageSize);
-  if(!rows.length){ $('tableBody').innerHTML='<tr><td colspan="9" class="empty">No matching tenders found.</td></tr>'; return; }
-  $('tableBody').innerHTML=rows.map(t=>{
-    const key=tenderKey(t), saved=state.saved.has(key), cat=String(t.category||'').toUpperCase()||'OTHER';
-    const status=text(t.status_text||t.status,'Published');
-    return `<tr>
-      <td><button class="save-btn ${saved?'saved':''}" data-save="${encodeURIComponent(key)}" title="Save tender">${saved?'♥':'♡'}</button></td>
-      <td><span class="badge ${esc(cat)}">${esc(cat)}</span></td>
-      <td><div class="t-title">${esc(text(t.title,'Tender'))}</div><div class="muted">${esc(text(t.ref_no||t.id,'No reference'))}</div></td>
-      <td><div class="dept">${esc(text(t.department,'Karnataka Government'))}</div><div class="muted">${esc(text(t.derived_city||t.location,'Karnataka'))}</div></td>
-      <td class="nowrap"><strong>${esc(money(t.amount,t.amount_display||'Refer tender'))}</strong></td>
-      <td class="nowrap">${esc(money(t.emd,'—'))}</td>
-      <td><span class="date ${closingSoon(t.closing_date)?'urgent':''}">${esc(text(t.closing_date,'—'))}</span></td>
-      <td><span class="status-pill">${esc(status)}</span></td>
-      <td><button class="details-btn" data-detail="${encodeURIComponent(key)}">View Details</button></td>
-    </tr>`;
-  }).join('');
-}
-function renderPagination(){
-  const pages=Math.max(1,Math.ceil(state.filtered.length/state.pageSize));
-  if(state.page>pages) state.page=pages;
-  $('pagination').innerHTML=`<button ${state.page<=1?'disabled':''} id="prevPage">← Previous</button><span>Page ${state.page} of ${pages}</span><button ${state.page>=pages?'disabled':''} id="nextPage">Next →</button>`;
-  $('prevPage')?.addEventListener('click',()=>{state.page--;renderTable();renderPagination();scrollToResults();});
-  $('nextPage')?.addEventListener('click',()=>{state.page++;renderTable();renderPagination();scrollToResults();});
-}
-function scrollToResults(){ $('resultsPanel').scrollIntoView({behavior:'smooth',block:'start'}); }
-
-function toggleSaved(key){
-  state.saved.has(key)?state.saved.delete(key):state.saved.add(key);
-  localStorage.setItem('kppp_saved_tenders',JSON.stringify([...state.saved])); render();
-}
-function resetFilters(){
-  $('searchInput').value=''; $('categoryFilter').value='ALL'; $('cityFilter').value='ALL'; $('deptFilter').value='ALL'; $('sortFilter').value='NEWEST'; applyFilters();
-}
-
-async function openDetails(key){
-  const tender=state.all.find(t=>tenderKey(t)===key); if(!tender) return;
-  $('detailModal').classList.add('open'); document.body.classList.add('modal-open');
-  $('modalTitle').textContent=tender.title||'Tender Details';
-  $('modalSub').textContent=[tender.category,tender.ref_no||tender.id,tender.department].filter(Boolean).join(' • ');
-  $('modalBody').innerHTML=renderListingFallback(tender,true);
-
-  const raw=tender.raw||{};
-  const nitId=first(raw,['nitId','nitID'],tender.nit_id||'');
-  const params=new URLSearchParams({category:String(tender.category||''),id:String(tender.id||''),nitId:String(nitId||'')});
-  try{
-    const r=await fetch('/api/tender_detail?'+params.toString(),{cache:'no-store'});
-    if(!r.ok) throw new Error(`Detail API returned HTTP ${r.status}`);
-    const payload=await r.json();
-    if(payload && payload.success && payload.detail){
-      $('modalBody').innerHTML=renderLiveDetail(tender,payload.detail);
-    } else {
-      $('modalBody').innerHTML=renderListingFallback(tender,false,payload?.message||'KPPP full-detail data is not available for this tender yet.');
-    }
-  }catch(e){
-    $('modalBody').innerHTML=renderListingFallback(tender,false,'Live KPPP detail could not be loaded. The tender-list information is still shown below.');
+    const d = Math.floor(days);
+    return { label: `${d} day${d === 1 ? '' : 's'} left`, tone: days <= 3 ? 'hot' : days <= 7 ? 'warm' : '', days };
   }
-}
 
-function renderListingFallback(t,loading=false,message=''){
-  const raw=t.raw||{};
-  return `${loading?'<div class="live-banner loading"><span class="spinner"></span> Loading full tender details from KPPP…</div>':`<div class="live-banner warning">⚠ ${esc(message)}</div>`}
-    <section class="detail-section"><div class="section-title"><h3>Overview</h3><span class="source-chip">Tender list data</span></div>
-      <div class="metric-grid">
-        ${metric('Estimated Value',money(t.amount,t.amount_display||'Refer tender'))}
-        ${metric('EMD',money(t.emd,'Refer tender'))}
-        ${metric('Tender Fee',money(t.fee,'Refer tender'))}
-        ${metric('Closing',text(t.closing_date,'Not available'))}
+  function ago(iso) {
+    const ms = Date.now() - Date.parse(iso);
+    if (!Number.isFinite(ms)) return null;
+    const min = Math.round(ms / 60000);
+    if (min < 1) return 'just now';
+    if (min < 60) return `${min} min ago`;
+    const h = Math.round(min / 60);
+    if (h < 48) return `${h} hr ago`;
+    return `${Math.round(h / 24)} days ago`;
+  }
+
+  const S = {
+    all: [], filtered: [], shown: 0, generatedAt: null,
+    cat: 'ALL', soon: 0, savedOnly: false, q: '',
+    saved: new Set(readJSON(SAVED_KEY, [])),
+    byId: new Map()
+  };
+
+  function readJSON(key, fallback) {
+    try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; } catch { return fallback; }
+  }
+  function writeJSON(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  }
+
+  // ---------- Theme ----------
+  function applyTheme(theme) {
+    if (theme) document.documentElement.dataset.theme = theme;
+    else delete document.documentElement.dataset.theme;
+  }
+  applyTheme(readJSON(THEME_KEY, null));
+
+  // ---------- Data ----------
+  function prepare(t) {
+    t._close = t.closing ? Date.parse(t.closing) : null;
+    t._pub = t.published ? Date.parse(t.published) : 0;
+    t._hay = [t.title, t.desc, t.ref, t.dept, t.office, t.district, t.work].filter(Boolean).join(' ').toLowerCase();
+    return t;
+  }
+
+  function ingest(payload) {
+    const now = Date.now();
+    S.generatedAt = payload.generated_at || null;
+    S.all = (payload.tenders || []).map(prepare).filter((t) => !t._close || t._close > now);
+    S.byId = new Map(S.all.map((t) => [t.id, t]));
+    buildFilterOptions();
+    updateCounts();
+    updateLive();
+    apply();
+  }
+
+  async function readCache() {
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      const hit = await cache.match(DATA_URL);
+      return hit ? await hit.json() : null;
+    } catch { return null; }
+  }
+  async function writeCache(text) {
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(DATA_URL, new Response(text, { headers: { 'Content-Type': 'application/json' } }));
+    } catch {}
+  }
+
+  async function load() {
+    // Show the last copy instantly on repeat visits, then swap in fresh data.
+    const network = fetch(DATA_URL, { cache: 'no-cache' });
+    const cached = await readCache();
+    if (cached?.tenders?.length) ingest(cached);
+    try {
+      const r = await network;
+      if (r.status === 401) {
+        window.KPPPAuth?.clearSession?.();
+        location.replace('/login.html?next=/');
+        return;
+      }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const text = await r.text();
+      const fresh = JSON.parse(text);
+      if (!cached || cached.generated_at !== fresh.generated_at) ingest(fresh);
+      writeCache(text);
+    } catch (err) {
+      if (!cached) {
+        $('resultTitle').textContent = 'Could not load tenders';
+        $('grid').innerHTML = `<div class="empty"><strong>Tender data is unavailable right now.</strong>Please refresh in a minute. (${esc(err.message)})</div>`;
+      }
+    }
+  }
+
+  // ---------- Filters ----------
+  function buildFilterOptions() {
+    const fill = (id, label, key) => {
+      const counts = new Map();
+      for (const t of S.all) if (t[key]) counts.set(t[key], (counts.get(t[key]) || 0) + 1);
+      const sel = $(id);
+      const current = sel.value;
+      const opts = [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      sel.innerHTML = `<option value="">${label}</option>` + opts.map(([v, c]) => `<option value="${esc(v)}">${esc(v)} (${fmtInt(c)})</option>`).join('');
+      if (current && counts.has(current)) sel.value = current;
+    };
+    fill('fDistrict', 'All districts', 'district');
+    fill('fDept', 'All departments', 'dept');
+  }
+
+  function updateCounts() {
+    const c = { ALL: S.all.length, WORKS: 0, GOODS: 0, SERVICES: 0, soon: 0 };
+    const soonLimit = Date.now() + 7 * DAY;
+    for (const t of S.all) {
+      c[t.cat] = (c[t.cat] || 0) + 1;
+      if (t._close && t._close <= soonLimit) c.soon++;
+    }
+    $('cAll').textContent = fmtInt(c.ALL);
+    $('cWorks').textContent = fmtInt(c.WORKS);
+    $('cGoods').textContent = fmtInt(c.GOODS);
+    $('cServices').textContent = fmtInt(c.SERVICES);
+    $('cSoon').textContent = fmtInt(c.soon);
+  }
+
+  function updateLive() {
+    const when = S.generatedAt ? ago(S.generatedAt) : null;
+    const stale = S.generatedAt && Date.now() - Date.parse(S.generatedAt) > 3 * 3600000;
+    $('liveText').textContent = when ? `${fmtInt(S.all.length)} live tenders · updated ${when}` : `${fmtInt(S.all.length)} live tenders`;
+    $('livePill').classList.toggle('stale', Boolean(stale));
+    if (S.generatedAt) $('footData').textContent = `Source: KPPP · last updated ${dateFmt.format(new Date(S.generatedAt))}`;
+  }
+
+  function readFilters() {
+    const [vmin, vmax] = ($('fValue').value || '-').split('-');
+    const closing = Number($('fClosing').value || 0) || S.soon;
+    return {
+      q: S.q.trim().toLowerCase(),
+      district: $('fDistrict').value,
+      dept: $('fDept').value,
+      vmin: vmin ? Number(vmin) : null,
+      vmax: vmax ? Number(vmax) : null,
+      closing,
+      access: $('fAccess').value,
+      sort: $('fSort').value
+    };
+  }
+
+  function apply({ keepScroll = false } = {}) {
+    const f = readFilters();
+    const terms = f.q ? f.q.split(/\s+/).filter(Boolean) : [];
+    const closeBy = f.closing ? Date.now() + f.closing * DAY : null;
+    const out = [];
+    for (const t of S.all) {
+      if (S.cat !== 'ALL' && t.cat !== S.cat) continue;
+      if (S.savedOnly && !S.saved.has(t.id)) continue;
+      if (f.district && t.district !== f.district) continue;
+      if (f.dept && t.dept !== f.dept) continue;
+      if (f.access && t.access !== f.access) continue;
+      if (f.vmin !== null || f.vmax !== null) {
+        const v = num(t.value);
+        if (v === null) continue;
+        if (f.vmin !== null && v < f.vmin) continue;
+        if (f.vmax !== null && v >= f.vmax) continue;
+      }
+      if (closeBy && !(t._close && t._close <= closeBy)) continue;
+      if (terms.length && !terms.every((w) => t._hay.includes(w))) continue;
+      out.push(t);
+    }
+    const by = {
+      new: (a, b) => b._pub - a._pub,
+      closing: (a, b) => (a._close || Infinity) - (b._close || Infinity),
+      value: (a, b) => (num(b.value) || 0) - (num(a.value) || 0),
+      emd: (a, b) => (num(a.emd) ?? Infinity) - (num(b.emd) ?? Infinity)
+    }[f.sort] || ((a, b) => b._pub - a._pub);
+    out.sort(by);
+    S.filtered = out;
+    S.shown = 0;
+    $('grid').innerHTML = '';
+    renderMore();
+    renderHead(f);
+    syncControls(f);
+    if (!keepScroll && window.scrollY > $('filters').offsetTop) window.scrollTo({ top: $('filters').offsetTop - 4 });
+  }
+
+  function renderHead(f) {
+    const n = S.filtered.length;
+    const catLabel = { ALL: 'tenders', WORKS: 'works tenders', GOODS: 'goods tenders', SERVICES: 'services tenders' }[S.cat];
+    $('resultTitle').innerHTML = `${fmtInt(n)} <span>${S.savedOnly ? 'saved ' : ''}${catLabel}</span>`;
+    const chips = [];
+    if (S.cat !== 'ALL') chips.push(['cat', S.cat[0] + S.cat.slice(1).toLowerCase()]);
+    if (f.q) chips.push(['q', `“${S.q.trim()}”`]);
+    if (f.district) chips.push(['fDistrict', f.district]);
+    if (f.dept) chips.push(['fDept', f.dept.length > 34 ? f.dept.slice(0, 32) + '…' : f.dept]);
+    if ($('fValue').value) chips.push(['fValue', $('fValue').selectedOptions[0].text]);
+    if (f.closing) chips.push(['fClosing', `Closing in ${f.closing} days`]);
+    if (f.access) chips.push(['fAccess', f.access]);
+    if (S.savedOnly) chips.push(['saved', 'Saved only']);
+    $('chips').innerHTML = chips.map(([k, label]) => `<button type="button" class="chip" data-clear="${k}">${esc(label)}<b aria-hidden="true">×</b></button>`).join('');
+  }
+
+  function syncControls(f) {
+    for (const id of ['fDistrict', 'fDept', 'fValue', 'fClosing', 'fAccess']) $(id).classList.toggle('set', Boolean($(id).value));
+    document.querySelectorAll('.stat[data-cat]').forEach((el) => el.classList.toggle('active', el.dataset.cat === S.cat && !f.closing));
+    document.querySelector('.stat.soon').classList.toggle('active', S.soon === 7 && !$('fClosing').value);
+    $('savedBtn').classList.toggle('on', S.savedOnly);
+    $('savedBtn').setAttribute('aria-pressed', String(S.savedOnly));
+    $('savedCount').textContent = S.saved.size;
+  }
+
+  // ---------- Cards ----------
+  const pinIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>';
+  const heartIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z"/></svg>';
+
+  function fig(label, value) {
+    return `<div><span>${label}</span>${value ? `<strong>${value}</strong>` : '<strong class="na">Not given</strong>'}</div>`;
+  }
+
+  function card(t) {
+    const left = timeLeft(t._close);
+    const saved = S.saved.has(t.id);
+    const where = [t.district, t.dept].filter(Boolean).join(' · ') || t.office || 'Karnataka';
+    return `<article class="card" data-id="${esc(t.id)}" tabindex="0" aria-label="${esc(t.title)}">
+      <div class="card-top">
+        <span class="badge ${esc(t.cat)}">${esc(t.cat)}</span>
+        ${t.access && t.access !== 'Open' ? `<span class="badge reserved">${esc(t.access)}</span>` : ''}
+        ${t.work ? `<span class="badge soft">${esc(t.work)}</span>` : ''}
+        ${left ? `<span class="due ${left.tone}">${esc(left.label)}</span>` : ''}
       </div>
-      <div class="info-grid">
-        ${info('Tender Number',t.ref_no||t.id)} ${info('Category',t.category)} ${info('Department',t.department)}
-        ${info('Location',t.location||t.derived_city)} ${info('Published',t.published_date)} ${info('Status',t.status_text||t.status)}
+      <h3>${esc(t.title)}</h3>
+      <div class="meta">${pinIcon}<span>${esc(where)}</span></div>
+      <div class="figures">${fig('Value', money(t.value))}${fig('EMD', money(t.emd))}${fig('Fee', money(t.fee))}</div>
+      <button class="save ${saved ? 'on' : ''}" type="button" data-save="${esc(t.id)}" aria-label="${saved ? 'Remove from saved' : 'Save tender'}" aria-pressed="${saved}">${heartIcon}</button>
+    </article>`;
+  }
+
+  function renderMore() {
+    const grid = $('grid');
+    if (!S.filtered.length) {
+      grid.innerHTML = `<div class="empty"><strong>No tenders match these filters.</strong>Try removing a filter or searching for a different word.</div>`;
+      $('moreBtn').hidden = true;
+      return;
+    }
+    const next = S.filtered.slice(S.shown, S.shown + PAGE);
+    grid.insertAdjacentHTML('beforeend', next.map(card).join(''));
+    S.shown += next.length;
+    const left = S.filtered.length - S.shown;
+    $('moreBtn').hidden = left <= 0;
+    $('moreBtn').textContent = `Show more (${fmtInt(left)} left)`;
+  }
+
+  function toggleSave(id) {
+    if (S.saved.has(id)) S.saved.delete(id); else S.saved.add(id);
+    writeJSON(SAVED_KEY, [...S.saved]);
+    const on = S.saved.has(id);
+    document.querySelectorAll(`[data-save="${CSS.escape(id)}"]`).forEach((b) => {
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', String(on));
+      if (b.classList.contains('btn')) b.lastChild.textContent = on ? ' Saved' : ' Save';
+    });
+    $('savedCount').textContent = S.saved.size;
+    toast(on ? 'Saved to your list' : 'Removed from saved');
+    if (S.savedOnly && !on) apply({ keepScroll: true });
+  }
+
+  // ---------- Drawer ----------
+  let lastFocus = null;
+  function openTender(id) {
+    const t = S.byId.get(id);
+    if (!t) return;
+    lastFocus = document.activeElement;
+    const left = timeLeft(t._close);
+    const closeText = t._close ? dateFmt.format(new Date(t._close)) : 'Not given';
+    const saved = S.saved.has(t.id);
+    const tk = 'https://www.google.com/search?q=' + encodeURIComponent(`site:tenderkart.in "${t.ref}"`);
+    const facts = [
+      ['Tender number', `<span class="ref">${esc(t.ref)}</span>`],
+      ['Department', esc(t.dept)],
+      ['Office', esc(t.office)],
+      ['District', esc(t.district || 'Not identified')],
+      ['Work category', esc(t.work)],
+      ['Tender type', esc(t.bidType)],
+      ['Who can bid', esc(t.access)],
+      ['Published', t._pub ? esc(dateFmt.format(new Date(t._pub))) : '']
+    ].filter(([, v]) => v);
+    const d = $('drawer');
+    d.innerHTML = `
+      <div class="drawer-head">
+        <div class="row">
+          <span class="badge ${esc(t.cat)}">${esc(t.cat)}</span>
+          ${t.access && t.access !== 'Open' ? `<span class="badge reserved">${esc(t.access)}</span>` : ''}
+          <button class="close" type="button" data-close aria-label="Close">✕</button>
+        </div>
+        <h2 id="dTitle">${esc(t.title)}</h2>
+        ${t.desc ? `<p>${esc(t.desc)}</p>` : ''}
       </div>
-    </section>
-    ${renderRaw(raw)}`;
-}
+      <div class="drawer-body">
+        <div class="countdown ${left ? left.tone : ''}">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/></svg>
+          <div><div class="big">${left ? esc(left.label) : 'No closing date'}</div><small>Bid submission closes ${esc(closeText)}</small></div>
+        </div>
+        <div class="kpis">
+          <div class="kpi"><span>Tender value</span><strong>${money(t.value) || '—'}</strong><small>${num(t.value) ? money(t.value, { full: true }) : 'Hidden by department'}</small></div>
+          <div class="kpi"><span>EMD</span><strong>${money(t.emd) || '—'}</strong><small>${num(t.emd) ? money(t.emd, { full: true }) : 'Check on KPPP'}</small></div>
+          <div class="kpi"><span>Tender fee</span><strong>${money(t.fee) || '—'}</strong><small>${num(t.fee) ? 'Non-refundable' : 'Check on KPPP'}</small></div>
+        </div>
+        <div class="actions">
+          <a class="btn primary" href="https://kppp.karnataka.gov.in/" target="_blank" rel="noopener">Open KPPP portal ↗</a>
+          <button class="btn" type="button" data-copy="${esc(t.ref)}">Copy tender number</button>
+          <button class="btn ${saved ? 'on' : ''}" type="button" data-save="${esc(t.id)}" aria-pressed="${saved}">${heartIcon}${saved ? ' Saved' : ' Save'}</button>
+          <a class="btn" href="${esc(tk)}" target="_blank" rel="noopener">Search on TenderKart ↗</a>
+        </div>
+        <section class="panel">
+          <h3>Tender details</h3>
+          <dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
+          <p class="note">On KPPP, search this tender number to download documents and submit your bid.</p>
+        </section>
+        ${calculatorHtml(t)}
+      </div>`;
+    d.setAttribute('aria-hidden', 'false');
+    d.classList.add('open');
+    $('scrim').classList.add('open');
+    document.body.style.overflow = 'hidden';
+    d.querySelector('.drawer-body').scrollTop = 0;
+    d.querySelector('[data-close]').focus();
+    bindCalculator(t);
+    if (location.hash !== '#t=' + t.id) history.pushState({ tender: t.id }, '', '#t=' + encodeURIComponent(t.id));
+  }
 
-function renderLiveDetail(listing,d){
-  const nit=d.noticeInvitingTenderDTO||{};
-  const sched=d.tenderSchedule||{};
-  const inviting=d.invitingAuthority||{};
-  const opening=d.openAuthority||{};
-  const evaluation=d.evaluationAuthority||{};
-  const appellate=d.appellateAuthority||{};
-  const title=firstAcross([sched,nit],['title','description'],listing.title); if(title) $('modalTitle').textContent=title;
-  const ecv=firstAcross([sched,nit],['ecv','estimatedContractValue','provisionalAmount'],listing.amount);
-  const emd=firstAcross([nit,sched],['emd','emdAmount'],listing.emd);
-  const fee=firstAcross([nit,sched],['tenderFee','tenderFeeAmount'],listing.fee);
-  const subEst=asArray(d.tenderSubEstimateList), general=asArray(d.generalCriterionList), technical=asArray(d.technicalCriterionList);
-  const docs=[...asArray(d.tenderCriterionDocumentList),...asArray(d.tenderFiles)];
-  const boq=subEst.flatMap(se=>asArray(se.itemList||se.tenderItemList||se.items).map(item=>({...item,__group:se.subEstimateName||se.workCategoryName||''})));
-  return `<div class="live-banner success">✓ Full details loaded from KPPP</div>
-    <section class="detail-section detail-overview"><div class="section-title"><h3>Overview</h3><span class="source-chip live">Live KPPP detail</span></div>
-      <div class="metric-grid">
-        ${metric('Estimated Contract Value',money(ecv,'Refer tender'))}
-        ${metric('EMD',money(emd,'Refer tender'))}
-        ${metric('Tender Fee',money(fee,'Refer tender'))}
-        ${metric('Bid Validity',firstAcross([nit,sched],['bidValidityPeriod','bidValidity']) ? firstAcross([nit,sched],['bidValidityPeriod','bidValidity'])+' days' : 'Not available')}
+  function closeDrawer({ fromHistory = false } = {}) {
+    const d = $('drawer');
+    if (!d.classList.contains('open')) return;
+    d.classList.remove('open');
+    d.setAttribute('aria-hidden', 'true');
+    $('scrim').classList.remove('open');
+    document.body.style.overflow = '';
+    if (!fromHistory && location.hash.startsWith('#t=')) history.back();
+    lastFocus?.focus?.();
+  }
+
+  // ---------- Bid calculator (runs in the browser) ----------
+  const PROFILES = {
+    WORKS: { direct: 80, overhead: 5, contingency: 3, margin: 8 },
+    GOODS: { direct: 90, overhead: 3, contingency: 2, margin: 6 },
+    SERVICES: { direct: 75, overhead: 8, contingency: 4, margin: 10 }
+  };
+
+  function calculatorHtml(t) {
+    const p = PROFILES[t.cat] || PROFILES.WORKS;
+    const slider = (id, label, value, max) => `<div class="field"><label for="${id}">${label}<output id="${id}Out">${value}%</output></label><input id="${id}" type="range" min="0" max="${max}" step="0.5" value="${value}"></div>`;
+    return `<section class="panel">
+      <h3>Bid calculator</h3>
+      <div class="calc-grid">
+        <div class="field" style="grid-column:1/-1"><label for="cValue">Tender value (₹)</label><input id="cValue" type="number" min="0" step="1000" inputmode="numeric" value="${num(t.value) ? Math.round(t.value) : ''}" placeholder="Enter the tender value"></div>
+        ${slider('cDirect', 'Direct cost (material + labour)', p.direct, 120)}
+        ${slider('cOverhead', 'Site overhead', p.overhead, 30)}
+        ${slider('cContingency', 'Risk / contingency', p.contingency, 20)}
+        ${slider('cMargin', 'Your profit margin', p.margin, 30)}
       </div>
-      <div class="info-grid">
-        ${info('Tender Number',firstAcross([sched,nit],['tenderNumber'],listing.ref_no||listing.id))}
-        ${info('Category',firstAcross([sched,nit],['categoryText','category'],listing.category))}
-        ${info('Department',firstAcross([sched,nit],['deptName','departmentName'],listing.department))}
-        ${info('Location',firstAcross([sched,nit],['locationName','location'],listing.location||listing.derived_city))}
-        ${info('Tender Type',firstAcross([nit,sched],['tenderType','invitingStrategyText','invitingStrategy']))}
-        ${info('Evaluation',firstAcross([nit,sched],['evaluationTypeText','evaluationType']))}
-        ${info('Commercial Bid Type',firstAcross([nit,sched],['textCommercialBidType','commercialBidType','bidValueTypeText','bidValueType']))}
-        ${info('No. of Calls',firstAcross([nit,sched],['noOfCalls','noOfCall']))}
-      </div>
-      ${firstAcross([sched,nit],['description'])?`<div class="description-box"><strong>Description</strong><p>${esc(firstAcross([sched,nit],['description']))}</p></div>`:''}
-    </section>
+      <div class="calc-out" id="calcOut"></div>
+      <p class="note">Percentages are of tender value and start from a typical ${esc((t.cat || 'works').toLowerCase())} profile — move them to match your own rates. Planning estimate only.</p>
+    </section>`;
+  }
 
-    <section class="detail-section"><div class="section-title"><h3>Important Dates</h3></div>
-      <div class="info-grid">
-        ${info('Published',firstAcross([nit,sched],['publishedDateStr','publishedDate'],listing.published_date))}
-        ${info('Bid Submission Closes',firstAcross([nit,sched],['tenderClosureDateStr','tenderClosureDate','tenderReceiptClose'],listing.closing_date))}
-        ${info('Query / Clarification Closes',firstAcross([nit,sched],['tenderQueryClose','tenderQueryCloseDate']))}
-        ${info('Technical Bid Opens',firstAcross([nit,sched],['technicalBidOpen','technicalBidOpenDate']))}
-        ${info('Pre-bid Meeting',firstAcross([nit,sched],['preBidMeetingDate','preBidMeeting']))}
-      </div>
-    </section>
+  function bindCalculator(t) {
+    const ids = ['cValue', 'cDirect', 'cOverhead', 'cContingency', 'cMargin'];
+    const run = () => {
+      const v = Number($('cValue').value) || 0;
+      const [direct, overhead, contingency, margin] = ids.slice(1).map((id) => {
+        const n = Number($(id).value) || 0;
+        $(id + 'Out').textContent = n + '%';
+        return n;
+      });
+      const out = $('calcOut');
+      if (v <= 0) {
+        out.innerHTML = '<div class="warnline">Enter the tender value to calculate your bid.</div>';
+        return;
+      }
+      const cost = v * (direct + overhead + contingency) / 100;
+      const bid = margin < 100 ? cost / (1 - margin / 100) : cost;
+      const profit = bid - cost;
+      const vsValue = ((bid - v) / v) * 100;
+      const pct = (n) => `${n > 0 ? '+' : ''}${n.toFixed(2)}%`;
+      out.innerHTML = `
+        <div class="kpi hero-kpi"><span>Suggested bid</span><strong>${money(bid, { full: true })}</strong><small>${pct(vsValue)} vs tender value (${vsValue <= 0 ? 'below' : 'above'} estimate)</small></div>
+        <div class="kpi"><span>Your total cost</span><strong>${money(cost)}</strong><small>Break-even bid</small></div>
+        <div class="kpi"><span>Expected profit</span><strong>${money(profit) || '₹0'}</strong><small>${margin}% of your bid</small></div>
+        <div class="kpi"><span>Maximum discount</span><strong>${cost < v ? ((v - cost) / v * 100).toFixed(1) + '%' : 'None'}</strong><small>Bid lower than this and you make a loss</small></div>
+        <div class="kpi"><span>Working capital</span><strong>${money(Math.max(cost * 0.12, num(t.emd) || 0))}</strong><small>Rough cash needed to start</small></div>
+        ${cost >= v ? '<div class="warnline" style="grid-column:1/-1">Your cost is at or above the tender value — check your rates before bidding.</div>' : ''}`;
+    };
+    ids.forEach((id) => $(id).addEventListener('input', run));
+    run();
+  }
 
-    <section class="detail-section"><div class="section-title"><h3>Authorities & Contact</h3></div>
-      <div class="info-grid">
-        ${info('Inviting Authority',firstAcross([inviting,nit],['name','authorityName','userName','createdByPost','postName']))}
-        ${info('Opening Authority',firstAcross([opening,nit],['name','authorityName','userName','createdByPost','postName']))}
-        ${info('Evaluation Authority',firstAcross([evaluation,nit],['name','authorityName','userName','createdByPost','postName']))}
-        ${info('Appellate Authority',firstAcross([appellate,nit],['name','authorityName','userName','createdByPost','postName']))}
-        ${info('Contact Person',firstAcross([nit,sched],['contactPerson','contactPersonName','tenderPublishedUserName']))}
-        ${info('Mobile',firstAcross([nit,sched],['mobileNumber','contactMobile']))}
-        ${info('Office Number',firstAcross([nit,sched],['officeNumber','contactNumber']))}
-      </div>
-    </section>
+  // ---------- Export ----------
+  function exportCsv() {
+    const rows = [['Tender number', 'Category', 'Title', 'Department', 'Office', 'District', 'Tender value', 'EMD', 'Fee', 'Published', 'Closing', 'Who can bid', 'Work category']];
+    const d = (ms) => (ms ? new Date(ms).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '');
+    for (const t of S.filtered) rows.push([t.ref, t.cat, t.title, t.dept, t.office, t.district, t.value, t.emd, t.fee, d(t._pub), d(t._close), t.access, t.work]);
+    const csv = rows.map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: `karnataka-tenders-${new Date().toISOString().slice(0, 10)}.csv` });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast(`Exported ${fmtInt(S.filtered.length)} tenders`);
+  }
 
-    ${renderBoq(boq,subEst)}
-    ${renderCriteria('Eligibility Conditions',general,'eligibility')}
-    ${renderCriteria('Technical Criteria',technical,'technical')}
-    ${renderDocuments(docs,technical,general)}
-    ${renderOtherLive(d)}`;
-}
+  // ---------- Status (admins) ----------
+  async function showStatus() {
+    const dlg = $('statusDialog');
+    const list = $('statusList');
+    list.innerHTML = '<li>Checking…</li>';
+    dlg.showModal();
+    try {
+      const r = await fetch('/api/system_health', { cache: 'no-store' });
+      const h = await r.json();
+      const db = h.database || {};
+      const s = h.secrets || {};
+      const row = (label, ok, text) => `<li><span>${label}</span><b class="${ok ? 'ok-t' : 'bad-t'}">${ok ? '✓' : '⚠'} ${esc(text)}</b></li>`;
+      list.innerHTML = [
+        row('Tender data', db.ok, `${fmtInt(db.count)} tenders · ${db.age_hours == null ? 'unknown age' : ago(db.last_success_at || db.generated_at)}`),
+        row('KPPP connection', h.kppp?.ok, h.kppp?.ok ? 'Reachable' : `Not reachable (HTTP ${h.kppp?.http || '—'})`),
+        row('Admin password', s.ADMIN_PASSWORD, s.ADMIN_PASSWORD ? 'Set' : 'Missing'),
+        row('Session secret', s.SESSION_SECRET, s.SESSION_SECRET ? 'Set' : 'Missing'),
+        row('Login storage', s.AUTH_STORE, s.AUTH_STORE ? 'Connected' : 'Missing')
+      ].join('');
+    } catch (err) {
+      list.innerHTML = `<li><span>Status check</span><b class="bad-t">⚠ ${esc(err.message)}</b></li>`;
+    }
+  }
 
-function metric(label,value){return `<div class="metric"><span>${esc(label)}</span><strong>${esc(text(value))}</strong></div>`;}
-function info(label,value){return `<div class="info"><span>${esc(label)}</span><strong>${esc(text(value))}</strong></div>`;}
+  // ---------- Misc ----------
+  let toastTimer;
+  function toast(text) {
+    const el = $('toast');
+    el.textContent = text;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 1800);
+  }
 
-function renderBoq(items,subEst){
-  if(!items.length) return '<section class="detail-section"><div class="section-title"><h3>BOQ / Estimate</h3></div><div class="empty-block">No item-level BOQ was returned in this KPPP response.</div></section>';
-  const total=items.reduce((s,i)=>s+(num(first(i,['netAmount','amount','totalAmount']))||0),0);
-  return `<section class="detail-section"><div class="section-title"><h3>BOQ / Estimate</h3><span class="count-chip">${fmt(items.length)} items</span></div>
-    ${subEst.length?`<div class="subestimate-row">${subEst.map(s=>`<div><span>${esc(text(first(s,['workCategoryName','subEstimateName'],'Estimate')))}</span><strong>${esc(money(first(s,['estimateTotal','totalAmount','amount']),'—'))}</strong></div>`).join('')}</div>`:''}
-    <div class="boq-wrap"><table class="boq-table"><thead><tr><th>#</th><th>Item</th><th>Description</th><th>Unit</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead><tbody>
-      ${items.map((i,idx)=>`<tr><td>${idx+1}</td><td><strong>${esc(text(first(i,['itemCode','code'],'—')))}</strong><small>${esc(text(first(i,['categoryName','eventName'],'')) )}</small></td><td class="desc">${esc(text(first(i,['description','itemDescription'],'—')))}</td><td>${esc(text(first(i,['uomName','unitName','unit'],'—')))}</td><td class="right">${esc(text(first(i,['quantity','qty'],'—')))}</td><td class="right">${esc(money(first(i,['finalRate','baseRate','rate']),'—'))}</td><td class="right"><strong>${esc(money(first(i,['netAmount','amount','totalAmount']),'—'))}</strong></td></tr>`).join('')}
-    </tbody><tfoot><tr><td colspan="6">BOQ total</td><td class="right"><strong>${esc(money(total,'—'))}</strong></td></tr></tfoot></table></div>
-  </section>`;
-}
+  function clearFilter(key) {
+    if (key === 'cat') S.cat = 'ALL';
+    else if (key === 'q') { S.q = ''; $('q').value = ''; }
+    else if (key === 'saved') S.savedOnly = false;
+    else if (key === 'fClosing') { $('fClosing').value = ''; S.soon = 0; }
+    else if ($(key)) $(key).value = '';
+    apply({ keepScroll: true });
+  }
 
-function renderCriteria(title,items,type){
-  const clean=items.filter(i=>first(i,['description','criterionTypeOthersValue','criterionDescription']));
-  if(!clean.length) return '';
-  return `<section class="detail-section"><div class="section-title"><h3>${esc(title)}</h3><span class="count-chip">${clean.length}</span></div><div class="criteria-list">
-    ${clean.map(i=>`<div class="criterion"><span class="check">✓</span><div><strong>${type==='technical'?esc(text(i.criterionCategoryText||i.criterionType,'')):esc(text(i.criterionType,''))}</strong><p>${esc(text(first(i,['description','criterionTypeOthersValue','criterionDescription'])))}</p></div></div>`).join('')}
-  </div></section>`;
-}
+  function reset() {
+    S.cat = 'ALL'; S.soon = 0; S.savedOnly = false; S.q = '';
+    $('q').value = '';
+    for (const id of ['fDistrict', 'fDept', 'fValue', 'fClosing', 'fAccess']) $(id).value = '';
+    $('fSort').value = 'new';
+    apply();
+  }
 
-function collectNestedDocs(technical,general){
-  const out=[];
-  for(const i of technical) out.push(...asArray(i.tenderTechnicalCriterionDocumentList));
-  for(const i of general) out.push(...asArray(i.tenderEligibilityCriterionDocumentList));
-  return out;
-}
-function renderDocuments(docs,technical,general){
-  const all=[...docs,...collectNestedDocs(technical,general)].filter(Boolean);
-  const seen=new Set(); const unique=all.filter(d=>{const k=first(d,['documentName','name','fileName','fileDescription']); if(!k||seen.has(k)) return false; seen.add(k); return true;});
-  if(!unique.length) return '<section class="detail-section"><div class="section-title"><h3>Tender Documents</h3></div><div class="empty-block">No document metadata was returned in this KPPP response.</div></section>';
-  return `<section class="detail-section"><div class="section-title"><h3>Tender Documents</h3><span class="count-chip">${unique.length}</span></div><div class="document-grid">
-    ${unique.map(d=>`<div class="doc-card"><span>📄</span><div><strong>${esc(text(first(d,['documentName','name','fileName','fileDescription']),'Document'))}</strong><small>${esc(text(first(d,['documentTypeText','documentType','fileType']),'KPPP tender document'))}${first(d,['id','documentId'])?` • ID ${esc(first(d,['id','documentId']))}`:''}</small></div></div>`).join('')}
-  </div></section>`;
-}
-function renderOtherLive(d){
-  const keys=['tenderAddress','tenderRecallDTO','corrigendumList','addendumList','tenderCorrigendumList','tenderAddendumList'];
-  const found=keys.filter(k=>d[k] && (Array.isArray(d[k])?d[k].length:true));
-  if(!found.length) return '';
-  return `<section class="detail-section"><div class="section-title"><h3>Other KPPP Information</h3></div><div class="raw-grid">${found.map(k=>`<div><span>${esc(k)}</span><pre>${esc(JSON.stringify(d[k],null,2))}</pre></div>`).join('')}</div></section>`;
-}
-function renderRaw(raw){
-  if(!raw || typeof raw!=='object') return '';
-  const entries=Object.entries(raw).filter(([,v])=>v!==null&&v!==''&&typeof v!=='object').slice(0,30);
-  if(!entries.length) return '';
-  return `<section class="detail-section subdued"><div class="section-title"><h3>Other Listing Information</h3></div><div class="raw-list">${entries.map(([k,v])=>`<div><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('')}</div></section>`;
-}
-function closeModal(){ $('detailModal').classList.remove('open'); document.body.classList.remove('modal-open'); }
-
-function bindEvents(){
-  let searchTimer;
-  $('searchInput').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(applyFilters,180);});
-  ['categoryFilter','cityFilter','deptFilter'].forEach(id=>$(id).addEventListener('change',applyFilters));
-  $('sortFilter').addEventListener('change',()=>{sortFiltered();state.page=1;render();});
-  $('resetBtn').addEventListener('click',resetFilters);
-  $('tableBody').addEventListener('click',(e)=>{
-    const save=e.target.closest('[data-save]'); if(save){toggleSaved(decodeURIComponent(save.dataset.save));return;}
-    const detail=e.target.closest('[data-detail]'); if(detail) openDetails(decodeURIComponent(detail.dataset.detail));
+  // ---------- Events ----------
+  let qTimer;
+  $('q').addEventListener('input', (e) => {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => { S.q = e.target.value; apply({ keepScroll: true }); }, 140);
   });
-  $('modalClose').addEventListener('click',closeModal);
-  $('detailModal').addEventListener('click',(e)=>{if(e.target===$('detailModal')) closeModal();});
-  document.addEventListener('keydown',(e)=>{if(e.key==='Escape') closeModal();});
-  document.querySelectorAll('[data-cat]').forEach(btn=>btn.addEventListener('click',()=>{$('categoryFilter').value=btn.dataset.cat;applyFilters();}));
-}
+  for (const id of ['fDistrict', 'fDept', 'fValue', 'fAccess', 'fSort']) $(id).addEventListener('change', () => apply({ keepScroll: true }));
+  $('fClosing').addEventListener('change', () => { S.soon = 0; apply({ keepScroll: true }); });
+  document.querySelectorAll('.stat[data-cat]').forEach((el) => el.addEventListener('click', () => {
+    S.cat = el.dataset.cat; S.soon = 0; $('fClosing').value = ''; apply();
+  }));
+  document.querySelector('.stat.soon').addEventListener('click', () => {
+    S.soon = S.soon === 7 ? 0 : 7; $('fClosing').value = ''; if (S.soon) $('fSort').value = 'closing'; apply();
+  });
+  $('savedBtn').addEventListener('click', () => { S.savedOnly = !S.savedOnly; apply({ keepScroll: true }); });
+  $('resetBtn').addEventListener('click', reset);
+  $('exportBtn').addEventListener('click', exportCsv);
+  $('moreBtn').addEventListener('click', renderMore);
+  $('chips').addEventListener('click', (e) => { const b = e.target.closest('[data-clear]'); if (b) clearFilter(b.dataset.clear); });
+  $('scrim').addEventListener('click', () => closeDrawer());
+  $('statusBtn').addEventListener('click', showStatus);
+  $('statusDialog').addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === e.currentTarget) $('statusDialog').close(); });
+  $('themeBtn').addEventListener('click', () => {
+    const dark = document.documentElement.dataset.theme
+      ? document.documentElement.dataset.theme === 'dark'
+      : matchMedia('(prefers-color-scheme: dark)').matches;
+    const next = dark ? 'light' : 'dark';
+    applyTheme(next); writeJSON(THEME_KEY, next);
+  });
 
-bindEvents();
-loadTenders();
+  document.addEventListener('click', (e) => {
+    const save = e.target.closest('[data-save]');
+    if (save) { e.stopPropagation(); toggleSave(save.dataset.save); return; }
+    const copy = e.target.closest('[data-copy]');
+    if (copy) { navigator.clipboard?.writeText(copy.dataset.copy).then(() => toast('Tender number copied')); return; }
+    if (e.target.closest('#drawer [data-close]')) { closeDrawer(); return; }
+    const c = e.target.closest('.card');
+    if (c) openTender(c.dataset.id);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDrawer();
+    if (e.key === 'Enter' && e.target.classList?.contains('card')) openTender(e.target.dataset.id);
+    if (e.key === '/' && !/input|select|textarea/i.test(document.activeElement?.tagName || '')) { e.preventDefault(); $('q').focus(); }
+  });
+  window.addEventListener('popstate', () => {
+    const m = location.hash.match(/^#t=(.+)$/);
+    if (m && S.byId.has(decodeURIComponent(m[1]))) openTender(decodeURIComponent(m[1]));
+    else closeDrawer({ fromHistory: true });
+  });
+
+  // Auto-load the next page when the "Show more" button scrolls into view.
+  new IntersectionObserver((entries) => {
+    if (entries.some((en) => en.isIntersecting) && !$('moreBtn').hidden) renderMore();
+  }, { rootMargin: '600px' }).observe($('moreBtn'));
+  new IntersectionObserver(([en]) => $('filters').classList.toggle('stuck', en.intersectionRatio < 1), { threshold: [1], rootMargin: '-1px 0px 0px 0px' }).observe($('filters'));
+
+  const user = window.KPPPAuth?.getUser?.();
+  if (user?.role === 'admin') $('statusBtn').hidden = false;
+
+  load().then(() => {
+    const m = location.hash.match(/^#t=(.+)$/);
+    if (m && S.byId.has(decodeURIComponent(m[1]))) {
+      history.replaceState(null, '', location.pathname);
+      openTender(decodeURIComponent(m[1]));
+    }
+  });
+  setInterval(updateLive, 60000);
+})();

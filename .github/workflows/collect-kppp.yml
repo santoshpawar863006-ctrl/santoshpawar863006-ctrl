@@ -12,6 +12,8 @@ on:
     paths:
       - "fetch_kppp.py"
       - "fix_financial_fields.py"
+      - "enrich_fees.py"
+      - "build_lite.py"
       - ".github/workflows/collect-kppp.yml"
 
 permissions:
@@ -48,6 +50,13 @@ jobs:
       - name: Prefer Positive KPPP Financial Fields
         run: |
           python fix_financial_fields.py
+
+      - name: Add EMD And Tender Fee From KPPP
+        # Never block the tender update if KPPP's detail endpoint is slow or down.
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          python enrich_fees.py
 
       - name: Validate Against Last Good Database
         run: |
@@ -133,6 +142,10 @@ jobs:
           print("SERVICES      :", health["category_counts"]["SERVICES"])
           PY
 
+      - name: Build Website Data File
+        run: |
+          python build_lite.py
+
       - name: Show Category Counts
         run: |
           python - <<'PY'
@@ -154,7 +167,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add public/tenders.json public/health.json
+          git add public/tenders.json public/tenders-lite.json public/health.json
+          if [ -f data/kppp-fees.json ]; then git add data/kppp-fees.json; fi
 
           if git diff --cached --quiet; then
             echo "No tender or health changes."
