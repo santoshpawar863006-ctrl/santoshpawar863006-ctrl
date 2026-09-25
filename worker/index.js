@@ -72,9 +72,9 @@ async function proxyRaw(filename, ctx, ttl = 60, env = null) {
 const KPPP_API = KPPP_BASE + '/supplier-registration-service/v1/api/portal-service';
 // KPPP's own tender page loads these per-category endpoints without a login.
 const SECTIONS = {
-  WORKS: { view: 'works-tender-full-view', files: 'get-works-tender-files', file: 'works-tender-file' },
-  GOODS: { view: 'goods-tender-full-view', files: 'get-goods-tender-files', file: 'goods-tender-file' },
-  SERVICES: { view: 'service-tender-full-view', files: 'get-services-tender-files', file: 'services-tender-file' }
+  WORKS: { view: 'works-tender-full-view', info: 'get-works-tender-general-info', files: 'get-works-tender-files', file: 'works-tender-file' },
+  GOODS: { view: 'goods-tender-full-view', info: 'get-goods-tender-general-info', files: 'get-goods-tender-files', file: 'goods-tender-file' },
+  SERVICES: { view: 'service-tender-full-view', info: 'get-services-tender-general-info', files: 'get-services-tender-files', file: 'services-tender-file' }
 };
 const KPPP_HEADERS = {
   Accept: 'application/json, text/plain, */*',
@@ -84,10 +84,23 @@ const KPPP_HEADERS = {
   'User-Agent': USER_AGENT
 };
 
-async function kpppJson(path) {
-  const response = await fetch(`${KPPP_API}/${path}`, { headers: KPPP_HEADERS, cf: { cacheTtl: 1800, cacheEverything: true } });
-  if (!response.ok) throw new Error(`KPPP returned HTTP ${response.status}`);
-  return response.json();
+// KPPP is sometimes slow or briefly fails, so each call has a time limit and is retried.
+async function kpppJson(path, { timeoutMs = 20000, tries = 2 } = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${KPPP_API}/${path}`, { headers: KPPP_HEADERS, signal: controller.signal, cf: { cacheTtl: 1800, cacheEverything: true } });
+      if (!response.ok) throw new Error(`KPPP returned HTTP ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      lastError = controller.signal.aborted ? new Error(`KPPP took longer than ${timeoutMs / 1000}s`) : error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError;
 }
 
 const clean = (v) => {
@@ -184,19 +197,42 @@ async function tenderDetail(category, nitId, ctx) {
   const section = SECTIONS[category];
   if (!section || !/^\d+$/.test(nitId)) return json({ success: false, message: 'Unknown tender.' }, 400);
   const cache = caches.default;
-  const cacheKey = new Request(`https://kppp-detail.local/${category}/${nitId}`);
+  const cacheKey = new Request(`https://kppp-detail.local/v2/${category}/${nitId}`);
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+  let shaped;
+  try {
+    shaped = shapeTender(category, await kpppJson(`${nitId}/${section.view}`), [], nitId);
+  } catch (fullError) {
+    // Fall back to the small "general info" call: dates, money, terms and contact, without lists.
+    try {
+      const info = await kpppJson(`${nitId}/${section.info}`, { timeoutMs: 12000 });
+      shaped = { ...shapeTender(category, { noticeInvitingTenderDTO: info.invitingTenderDTO, tenderSchedule: info.tenderScheduleDTO }, [], nitId), partial: true };
+    } catch {
+      return json({ success: false, message: `Could not load details from KPPP (${String(fullError.message || fullError).slice(0, 80)}).` }, 502);
+    }
+  }
+  delete shaped.files;
+  const response = json(shaped, 200, `public, max-age=${shaped.partial ? 120 : 1800}, s-maxage=${shaped.partial ? 120 : 1800}`);
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+}
+
+// The documents list can take KPPP 30s+, so it is fetched separately from the details.
+async function tenderFiles(category, nitId, ctx) {
+  const section = SECTIONS[category];
+  if (!section || !/^\d+$/.test(nitId)) return json({ success: false, message: 'Unknown tender.' }, 400);
+  const cache = caches.default;
+  const cacheKey = new Request(`https://kppp-files.local/${category}/${nitId}`);
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
   try {
-    const [full, files] = await Promise.all([
-      kpppJson(`${nitId}/${section.view}`),
-      kpppJson(`${nitId}/${section.files}`).catch(() => [])
-    ]);
-    const response = json(shapeTender(category, full, files, nitId), 200, 'public, max-age=1800, s-maxage=1800');
+    const files = await kpppJson(`${nitId}/${section.files}`, { timeoutMs: 45000 });
+    const response = json({ success: true, files: shapeTender(category, {}, files, nitId).files }, 200, 'public, max-age=21600, s-maxage=21600');
     ctx.waitUntil(cache.put(cacheKey, response.clone()));
     return response;
   } catch (error) {
-    return json({ success: false, message: `Could not load details from KPPP (${String(error.message || error).slice(0, 80)}).` }, 502);
+    return json({ success: false, message: `KPPP did not send the documents list (${String(error.message || error).slice(0, 80)}).` }, 502);
   }
 }
 
@@ -295,6 +331,8 @@ export default {
     if (url.pathname === '/api/system_health') return systemHealth(ctx, env);
     const detail = url.pathname.match(/^\/api\/tender\/(WORKS|GOODS|SERVICES)\/(\d+)$/);
     if (detail) return tenderDetail(detail[1], detail[2], ctx);
+    const fileList = url.pathname.match(/^\/api\/tender-files\/(WORKS|GOODS|SERVICES)\/(\d+)$/);
+    if (fileList) return tenderFiles(fileList[1], fileList[2], ctx);
     const file = url.pathname.match(/^\/api\/tender-file\/(WORKS|GOODS|SERVICES)\/(\d+)\/([0-9a-fA-F-]+)$/);
     if (file) return tenderFile(file[1], file[2], file[3], url.searchParams.get('name'), url.searchParams.has('dl'));
     // Old bookmarks to the removed login/admin pages go to the tender list.

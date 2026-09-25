@@ -442,7 +442,7 @@
     const key = `${t.cat}/${t.nit}`;
     try {
       if (!detailCache.has(key)) {
-        detailCache.set(key, fetch(`/api/tender/${key}`).then((r) => r.json()).then((j) => {
+        detailCache.set(key, fetch(`/api/tender/${key}`).then((r) => r.json().catch(() => ({ success: false, message: `Server returned HTTP ${r.status}` }))).then((j) => {
           if (!j.success) throw new Error(j.message || 'Not available');
           return j;
         }));
@@ -450,14 +450,47 @@
       const full = await detailCache.get(key);
       if ($('tpFull') !== box) return; // another tender was opened meanwhile
       renderFull(t, full);
-    } catch {
+    } catch (err) {
       detailCache.delete(key);
-      if ($('tpFull') === box) box.innerHTML = fullUnavailable(t);
+      if ($('tpFull') === box) {
+        box.innerHTML = fullUnavailable(t, err?.message);
+        $('retryFull')?.addEventListener('click', () => { box.innerHTML = loadingBlock(); loadFull(t); });
+      }
     }
   }
 
-  function fullUnavailable(t) {
-    return `<section class="panel"><h3>Full details</h3><p class="muted-p">KPPP didn't send the full details right now. Search for <b class="ref">${esc(t.ref)}</b> on the KPPP portal to see documents and conditions, or try again in a minute.</p></section>`;
+  const filesCache = new Map();
+  async function loadFiles(t) {
+    const box = $('tpFiles');
+    if (!box || !t.nit) return;
+    const key = `${t.cat}/${t.nit}`;
+    try {
+      if (!filesCache.has(key)) {
+        filesCache.set(key, fetch(`/api/tender-files/${key}`).then((r) => r.json().catch(() => ({ success: false }))).then((j) => {
+          if (!j.success) throw new Error(j.message || 'Not available');
+          return j.files || [];
+        }));
+      }
+      const files = await filesCache.get(key);
+      if ($('tpFiles') !== box) return;
+      box.innerHTML = files.length ? `<h3>Tender documents <span class="count">${files.length}</span></h3>
+        <div class="files">${files.map((x) => `<div class="file">${icon.doc}<span><b>${esc(x.name)}</b><small>${esc(x.type || 'Document')}</small></span>
+          ${/\.pdf$/i.test(x.name) ? `<a class="btn" href="${esc(x.url)}" target="_blank" rel="noopener">View</a>` : ''}
+          <a class="btn primary" href="${esc(x.url)}&dl=1" download="${esc(x.name)}">Download</a></div>`).join('')}</div>
+        <p class="note">Downloads come straight from KPPP. Large files can take a few seconds to start.</p>`
+        : '<h3>Tender documents</h3><p class="muted-p">KPPP lists no documents for this tender.</p>';
+    } catch (err) {
+      filesCache.delete(key);
+      if ($('tpFiles') !== box) return;
+      box.innerHTML = `<h3>Tender documents</h3><p class="muted-p">KPPP didn't send the documents list right now.</p><button class="btn" type="button" id="retryFiles">Try again</button>`;
+      $('retryFiles')?.addEventListener('click', () => { box.innerHTML = '<h3>Tender documents</h3><p class="muted-p">Loading documents from KPPP…</p>'; loadFiles(t); });
+    }
+  }
+
+  function fullUnavailable(t, reason = '') {
+    return `<section class="panel"><h3>Full details</h3><p class="muted-p">KPPP didn't send the full details right now. Search for <b class="ref">${esc(t.ref)}</b> on the KPPP portal, or try again.</p>
+      ${reason ? `<p class="note">${esc(reason)}</p>` : ''}
+      <button class="btn" type="button" id="retryFull">Try again</button></section>`;
   }
 
   function renderFull(t, f) {
@@ -499,12 +532,7 @@
       ['Office', esc(t.office)]
     ].filter(([, v]) => v);
 
-    const files = f.files.length ? `<section class="panel"><h3>Tender documents <span class="count">${f.files.length}</span></h3>
-      <div class="files">${f.files.map((x) => `<div class="file">${icon.doc}<span><b>${esc(x.name)}</b><small>${esc(x.type || 'Document')}</small></span>
-        ${/\.pdf$/i.test(x.name) ? `<a class="btn" href="${esc(x.url)}" target="_blank" rel="noopener">View</a>` : ''}
-        <a class="btn primary" href="${esc(x.url)}&dl=1" download="${esc(x.name)}">Download</a></div>`).join('')}</div>
-      <p class="note">Downloads come straight from KPPP. Large files can take a few seconds to start.</p>
-    </section>` : '';
+    const files = `<section class="panel" id="tpFiles"><h3>Tender documents</h3><p class="muted-p">Loading documents from KPPP… this can take up to half a minute.</p></section>`;
 
     const eligibility = f.eligibility.length ? `<section class="panel"><h3>Who is eligible <span class="count">${f.eligibility.length}</span></h3>
       <ol class="rules">${f.eligibility.map((x) => `<li>${esc(x)}</li>`).join('')}</ol></section>` : '';
@@ -547,6 +575,10 @@
       <section class="panel"><h3>Tender details</h3><dl class="facts">${terms.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></section>
       ${files}${eligibility}${technical}${docs}${items}`;
     if (t.cat === 'WORKS' && itemCount) annotateRates(t, f);
+    loadFiles(t);
+    if (f.partial) {
+      $('tpFull').insertAdjacentHTML('afterbegin', '<p class="note">KPPP was slow, so this shows the main details only. Open the tender again in a minute for eligibility, documents checklist and bill of quantities.</p>');
+    }
     $('tpFull').querySelectorAll('.show-rows').forEach((b) => b.addEventListener('click', () => {
       $('tpFull').querySelectorAll(`.more-row[data-group="${b.dataset.group}"]`).forEach((r) => { r.hidden = false; });
       b.remove();
