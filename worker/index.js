@@ -288,7 +288,7 @@ export default {
 
     if (request.method !== 'GET') return json({ success: false, message: 'Method not allowed.' }, 405);
 
-    if (['/tenders-lite.json', '/tenders.json', '/results-lite.json'].includes(url.pathname)) {
+    if (['/tenders-lite.json', '/tenders.json', '/results-lite.json', '/rates-lite.json'].includes(url.pathname)) {
       return proxyRaw(url.pathname.slice(1), ctx, 300, env);
     }
     if (url.pathname === '/health.json') return proxyRaw('health.json', ctx, 30, env);

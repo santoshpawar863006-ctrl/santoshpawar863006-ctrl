@@ -521,6 +521,7 @@
 
     const itemCount = f.groups.reduce((n, g) => n + g.items.length, 0);
     const items = itemCount ? `<section class="panel"><h3>${t.cat === 'WORKS' ? 'Bill of quantities' : 'Items'} <span class="count">${fmtInt(itemCount)}</span></h3>
+      <div id="boqPricing"></div>
       ${f.groups.map((g, gi) => {
         // Goods tenders often carry ₹1 placeholder prices; only show real rates.
         const showRate = g.items.some((i) => i.rate > 1);
@@ -529,11 +530,11 @@
         ${g.name || g.total ? `<div class="boq-head"><b>${esc(g.name || 'Items')}</b>${g.note ? `<span class="badge soft">${esc(g.note)}</span>` : ''}${g.total ? `<span class="spacer"></span><strong>${money(g.total, { full: true })}</strong>` : ''}</div>` : ''}
         <div class="table-wrap"><table>
           <thead><tr><th>#</th><th>Item</th><th class="n">Qty</th><th>Unit</th>${showRate ? '<th class="n">Rate</th>' : ''}${showAmt ? '<th class="n">Amount</th>' : ''}</tr></thead>
-          <tbody>${g.items.map((i, ii) => `<tr${ii >= 12 ? ` class="more-row" data-group="${gi}" hidden` : ''}>
+          <tbody>${g.items.map((i, ii) => `<tr data-item="${gi}:${ii}"${ii >= 12 ? ` class="more-row" data-group="${gi}" hidden` : ''}>
             <td>${esc(i.code || ii + 1)}</td>
             <td><div class="item-name">${esc(i.name)}</div>${i.spec && i.spec !== i.name ? `<small>${esc(i.spec)}</small>` : ''}${i.section ? `<small>${esc(i.section)}</small>` : ''}</td>
             <td class="n">${i.qty ?? ''}</td><td>${esc(i.unit)}</td>
-            ${showRate ? `<td class="n">${i.rate ? money(i.rate, { full: true }) : ''}</td>` : ''}
+            ${showRate ? `<td class="n">${i.rate ? money(i.rate, { full: true }) : ''}<span class="past-rate" data-past="${gi}:${ii}"></span></td>` : ''}
             ${showAmt ? `<td class="n">${i.amount ? money(i.amount, { full: true }) : ''}</td>` : ''}
           </tr>`).join('')}</tbody>
         </table></div>
@@ -545,6 +546,7 @@
     $('tpFull').innerHTML = `
       <section class="panel"><h3>Tender details</h3><dl class="facts">${terms.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></section>
       ${files}${eligibility}${technical}${docs}${items}`;
+    if (t.cat === 'WORKS' && itemCount) annotateRates(t, f);
     $('tpFull').querySelectorAll('.show-rows').forEach((b) => b.addEventListener('click', () => {
       $('tpFull').querySelectorAll(`.more-row[data-group="${b.dataset.group}"]`).forEach((r) => { r.hidden = false; });
       b.remove();
@@ -796,6 +798,61 @@
         window.scrollTo({ top: $('resultsView').offsetTop - 10 });
       });
     });
+  }
+
+  // ---------- Item-wise past rates ----------
+  // Same matching key as item_key() in collect_results.py: schedule code + unit + first 10 words.
+  function itemKey(code, name, unit) {
+    let c = String(code || '').toLowerCase().replace(/\s+/g, '');
+    if (/^(code|itemno\.?|item|sl\.?no\.?)?\d*$/.test(c)) c = '';
+    const n = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).slice(0, 10).join(' ');
+    const u = String(unit || '').toLowerCase().replace(/\s+/g, '');
+    return `${c}|${u}|${n}`;
+  }
+
+  let ratesLoading = null;
+  function loadRates() {
+    if (!ratesLoading) {
+      ratesLoading = fetch('/rates-lite.json', { cache: 'no-cache' })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+        .catch((err) => { ratesLoading = null; throw err; });
+    }
+    return ratesLoading;
+  }
+
+  async function annotateRates(t, f) {
+    let lib;
+    try { lib = (await loadRates()).items || {}; } catch { return; }
+    const box = $('boqPricing');
+    if (!box) return;
+    let matched = 0, total = 0, estMatched = 0, pastMatched = 0, estAll = 0;
+    f.groups.forEach((g, gi) => g.items.forEach((i, ii) => {
+      total++;
+      const est = num(i.rate) ? i.rate * (i.qty || 0) : 0;
+      estAll += est;
+      const hit = lib[itemKey(i.code, i.name, i.unit)];
+      const cell = document.querySelector(`[data-past="${gi}:${ii}"]`);
+      if (!hit || !cell) return;
+      matched++;
+      // Middle half of winning rates: some bidders quote ₹1 on a few items, so skip the extremes.
+      const [, lo, med, hi] = hit.l1;
+      const vsDept = num(i.rate) ? (med / i.rate - 1) * 100 : null;
+      cell.innerHTML = `<small class="past ${vsDept !== null && vsDept < 0 ? 'lower' : ''}" title="What winning (L1) bidders quoted for this item in ${hit.tenders} past KPPP tenders">
+        Past winners usually ${lo === hi ? money(lo, { full: true }) : `${money(lo, { full: true })}–${money(hi, { full: true })}`}
+        · median ${money(med, { full: true })}${vsDept !== null ? ` (${vsDept > 0 ? '+' : ''}${vsDept.toFixed(1)}%)` : ''} · ${hit.tenders} tender${hit.tenders === 1 ? '' : 's'}</small>`;
+      if (est) { estMatched += est; pastMatched += (i.qty || 0) * med; }
+    }));
+    if (!matched) {
+      box.innerHTML = '<p class="note">No past winning rates found yet for these items. The rates library grows every few hours as more results are collected.</p>';
+      return;
+    }
+    const ratio = estMatched ? pastMatched / estMatched : null;
+    const cover = estAll ? estMatched / estAll * 100 : 0;
+    box.innerHTML = `<div class="pricing">
+      <div><span>Items with past winning rates</span><strong>${fmtInt(matched)} of ${fmtInt(total)}</strong><small>${cover.toFixed(0)}% of the work by value</small></div>
+      ${ratio ? `<div><span>Past winners priced these items at</span><strong>${Math.abs((ratio - 1) * 100).toFixed(1)}% ${ratio < 1 ? 'below' : 'above'}</strong><small>the department's rates (median L1 rates)</small></div>` : ''}
+      ${ratio && num(t.value) ? `<div class="hl"><span>Competitive bid from real rates</span><strong>${money(t.value * ratio, { full: true })}</strong><small>if the rest of the work is priced the same way</small></div>` : ''}
+    </div>`;
   }
 
   // ---------- Contractor profile ----------

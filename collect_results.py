@@ -26,7 +26,9 @@ from urllib3.util.retry import Retry
 from build_lite import district_of, iso_ist, positive
 
 CACHE = Path("data/results-cache.json")
+ITEMS_CACHE = Path("data/item-rates-cache.json")
 TARGET = Path("public/results-lite.json")
+RATES = Path("public/rates-lite.json")
 API = "https://kppp.karnataka.gov.in/supplier-registration-service/v1/api/portal-service"
 SEARCH = {"WORKS": "works/search-eproc-tenders", "GOODS": "search-eproc-tenders", "SERVICES": "services/search-eproc-tenders"}
 FULL_VIEW = {"WORKS": "works-tender-full-view", "GOODS": "goods-tender-full-view", "SERVICES": "service-tender-full-view"}
@@ -77,34 +79,89 @@ def clean(value):
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
+def item_key(code, name, unit):
+    """Match the same BOQ item across tenders: schedule code + unit + first words of the name.
+
+    Custom codes ("code01", "Item No. 3") mean nothing across tenders, so those items match by name.
+    public/app.js has the same function; keep them in step.
+    """
+    c = re.sub(r"\s+", "", str(code or "").lower())
+    if re.fullmatch(r"(code|itemno\.?|item|sl\.?no\.?)?\d*", c):
+        c = ""
+    n = " ".join(re.sub(r"[^a-z0-9]+", " ", str(name or "").lower()).split()[:10])
+    u = re.sub(r"\s+", "", str(unit or "").lower())
+    return f"{c}|{u}|{n}"
+
+
+def num(value):
+    try:
+        return float(str(value).replace(",", "").strip())
+    except Exception:
+        return None
+
+
 def parse_statement(content):
-    """Bidders, their totals, ranks and % vs estimate from a WORKS comparative statement."""
-    sheet = load_workbook(io.BytesIO(content)).worksheets[0]
-    rows = [[c for c in row if c not in (None, "")] for row in sheet.iter_rows(values_only=True)]
-    names, totals = [], []
-    for i, row in enumerate(rows):
-        if not row:
-            continue
-        head = clean(row[0]).lower()
-        if head.startswith("dept name") or head.startswith("department name"):
-            # The bidder names are on the next non-empty row.
-            for nxt in rows[i + 1:i + 4]:
-                if nxt:
-                    names = [clean(n) for n in nxt]
-                    break
-        elif head.startswith("total bid amount"):
-            totals = [clean(v) for v in row[1:]]
+    """Bidders (total, rank) and item-wise quoted rates from a WORKS comparative statement.
+
+    Layout: bidder names sit above their "Quoted Rate" column; the next column is that
+    bidder's item amount, and the "Total Bid Amount" row carries "<total> (L<rank>)" there.
+    KPPP lists every item twice, so items are de-duplicated.
+    """
+    rows = [list(r) for r in load_workbook(io.BytesIO(content)).worksheets[0].iter_rows(values_only=True)]
+    text = lambda v: clean(v).lower()
+    header_at = next(i for i, r in enumerate(rows) if r and text(r[0]).startswith(("sno", "sl. no", "sl.no")))
+    header = [text(v) for v in rows[header_at]]
+    col = {name: header.index(name) for name in ("item name", "item code", "unit", "estimate quantity", "estimate rate") if name in header}
+    quoted_cols = [j for j, h in enumerate(header) if h == "quoted rate"]
+    names_row = next((r for r in reversed(rows[:header_at]) if any(r[j] not in (None, "") for j in quoted_cols if j < len(r))), [])
+    totals_row = next((r for r in rows if any(text(v).startswith("total bid amount") for v in r)), [])
+
     bidders = []
-    for idx, name in enumerate(names):
-        total = totals[idx] if idx < len(totals) else ""
+    for j in quoted_cols:
+        total = clean(totals_row[j + 1]) if j + 1 < len(totals_row) else ""
         rank = re.search(r"\(L(\d+)\)", total)
         bidders.append({
-            "name": name,
+            "name": clean(names_row[j]) if j < len(names_row) else "",
             "amount": positive(re.sub(r"\(.*?\)", "", total)),
             "rank": int(rank.group(1)) if rank else None,
-            })
-    bidders.sort(key=lambda b: (b["rank"] is None, b["rank"] or 0))
-    return bidders
+            "_col": j,
+        })
+
+    items, seen = [], set()
+    for r in rows[header_at + 1:]:
+        if any(text(v).startswith("total summary") for v in r):
+            break
+        get = lambda name: r[col[name]] if name in col and col[name] < len(r) else None
+        name, code, unit = clean(get("item name")), clean(get("item code")), clean(get("unit"))
+        qty, est = num(get("estimate quantity")), num(get("estimate rate"))
+        if not name or est is None:
+            continue
+        rates = [num(r[b["_col"]]) if b["_col"] < len(r) else None for b in bidders]
+        sig = (code, name, qty, est, tuple(rates))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        items.append({"key": item_key(code, name, unit), "code": code, "name": name[:140], "unit": unit,
+                      "qty": qty, "est": est, "rates": rates})
+
+    # Order bidders (and each item's rates) by rank, L1 first.
+    order = sorted(range(len(bidders)), key=lambda i: (bidders[i]["rank"] is None, bidders[i]["rank"] or 0))
+    bidders = [{k: v for k, v in bidders[i].items() if k != "_col"} for i in order]
+    for item in items:
+        item["rates"] = [item["rates"][i] for i in order]
+    return bidders, items
+
+
+def fetch_statement(session, category, nit):
+    sheet = session.get(
+        f"{API}/tender-eval/{nit}/commercial-evaluation/tender-category/{category}/commercial-comparison/download-detailed",
+        headers={**HEADERS, "Accept": "*/*"}, timeout=60)
+    if sheet.status_code != 200 or sheet.content[:2] != b"PK":
+        return [], []
+    try:
+        return parse_statement(sheet.content)
+    except Exception:
+        return [], []
 
 
 def lookup(session, category, raw):
@@ -114,16 +171,7 @@ def lookup(session, category, raw):
     detail = full.json() or {}
     award = detail.get("tenderAwardDatesDTO") or {}
     winners = [clean(w.get("name")) for w in award.get("listOfBidderDonePBGDTO") or [] if w.get("name")]
-    bidders = []
-    if category == "WORKS":
-        sheet = session.get(
-            f"{API}/tender-eval/{nit}/commercial-evaluation/tender-category/{category}/commercial-comparison/download-detailed",
-            headers={**HEADERS, "Accept": "*/*"}, timeout=60)
-        if sheet.status_code == 200 and sheet.content[:2] == b"PK":
-            try:
-                bidders = parse_statement(sheet.content)
-            except Exception:
-                bidders = []
+    bidders, items = fetch_statement(session, category, nit) if category == "WORKS" else ([], [])
     # KPPP's own "% against Estimated Rate" is taken against a double-counted
     # estimate, so work it out from the tender's estimated contract value.
     estimate = positive(raw.get("ecv"))
@@ -148,12 +196,54 @@ def lookup(session, category, raw):
         "winner": winners[0] if winners else (bidders[0]["name"] if bidders else None),
         "bidders": bidders,
     }
-    return {k: v for k, v in record.items() if v not in (None, "", [])}
+    return {k: v for k, v in record.items() if v not in (None, "", [])}, items
+
+
+def quantiles(values):
+    v = sorted(values)
+    pick = lambda q: round(v[min(len(v) - 1, int(q * (len(v) - 1) + 0.5))], 2)
+    return [pick(0), pick(0.25), pick(0.5), pick(0.75), pick(1)]
+
+
+def build_rates(results, items_cache):
+    """Per BOQ item: what winners (L1) and all bidders quoted, against the department's rate."""
+    groups = {}
+    for nit, items in items_cache.items():
+        result = results.get(nit) or {}
+        for item in items:
+            rates = item.get("rates") or []
+            est = item.get("est")
+            if not rates or not est or est <= 0 or rates[0] is None or rates[0] <= 0:
+                continue
+            g = groups.setdefault(item["key"], {"names": {}, "unit": item.get("unit"), "code": item.get("code"),
+                                                "l1": [], "all": [], "ratio": [], "est": [], "tenders": set(), "recent": []})
+            g["names"][item["name"]] = g["names"].get(item["name"], 0) + 1
+            g["l1"].append(rates[0])
+            g["all"].extend(r for r in rates if r and r > 0)
+            g["ratio"].append(rates[0] / est)
+            g["est"].append(est)
+            g["tenders"].add(nit)
+            g["recent"].append((result.get("awarded") or "", rates[0], est, result.get("district") or "", nit))
+    out = {}
+    for key, g in groups.items():
+        recent = sorted(g["recent"], reverse=True)[:5]
+        out[key] = {
+            "name": max(g["names"], key=g["names"].get),
+            "code": g["code"], "unit": g["unit"],
+            "tenders": len(g["tenders"]),
+            "est": quantiles(g["est"])[2],
+            "l1": quantiles(g["l1"]),
+            "all": quantiles(g["all"])[1:4],
+            "ratio": round(quantiles(g["ratio"])[2], 4),
+            "recent": [{"date": d[:10], "rate": r, "est": e, "district": dist, "nit": n} for d, r, e, dist, n in recent],
+        }
+    return out
 
 
 def main():
     session = make_session()
     cache = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
+    items_cache = json.loads(ITEMS_CACHE.read_text(encoding="utf-8")) if ITEMS_CACHE.exists() else {}
     todo = []
     for category in SEARCH:
         try:
@@ -163,7 +253,11 @@ def main():
             continue
         print(f"{category}: {len(listed)} awarded tenders listed", flush=True)
         todo.extend((category, raw) for raw in listed if raw.get("nitId") and str(raw["nitId"]) not in cache)
+    # Works results collected before item rates were stored only need their statement re-read.
+    backfill = [nit for nit, r in cache.items() if r.get("cat") == "WORKS" and r.get("bidders") and nit not in items_cache]
     todo = todo[:MAX_LOOKUPS]
+    backfill = backfill[:max(0, MAX_LOOKUPS - len(todo))]
+    print(f"{len(todo)} new results to look up, {len(backfill)} item-rate backfills", flush=True)
 
     started = time.monotonic()
     ok = failed = 0
@@ -171,28 +265,41 @@ def main():
     def save():
         CACHE.parent.mkdir(parents=True, exist_ok=True)
         CACHE.write_text(json.dumps(cache, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        ITEMS_CACHE.write_text(json.dumps(items_cache, ensure_ascii=False, sort_keys=True, separators=(",", ":")), encoding="utf-8")
 
-    def guarded(cat, raw):
-        # Lookups queued after the time budget are skipped, not started.
+    def guarded(job):
+        # Jobs queued after the time budget are skipped, not started.
         if time.monotonic() - started > TIME_BUDGET:
             return None
-        return lookup(session, cat, raw)
+        kind, cat, payload = job
+        if kind == "new":
+            return kind, lookup(session, cat, payload)
+        return kind, (payload, fetch_statement(session, cat, payload)[1])
 
+    jobs = [("new", cat, raw) for cat, raw in todo] + [("items", "WORKS", nit) for nit in backfill]
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        futures = {pool.submit(guarded, cat, raw): raw for cat, raw in todo}
+        futures = [pool.submit(guarded, job) for job in jobs]
         for future in as_completed(futures):
             try:
-                record = future.result()
+                done = future.result()
             except Exception:
                 failed += 1
                 continue
-            if record is None:
+            if done is None:
                 continue
-            cache[record["nit"]] = record
+            kind, value = done
+            if kind == "new":
+                record, items = value
+                cache[record["nit"]] = record
+                if items:
+                    items_cache[record["nit"]] = items
+            else:
+                nit, items = value
+                items_cache[nit] = items
             ok += 1
             if ok % 200 == 0:
                 save()
-                print(f"  {ok} results saved ({int(time.monotonic() - started)}s)", flush=True)
+                print(f"  {ok} done ({int(time.monotonic() - started)}s)", flush=True)
 
     save()
     results = sorted(cache.values(), key=lambda r: r.get("awarded") or r.get("closed") or "", reverse=True)
@@ -201,9 +308,16 @@ def main():
         "count": len(results),
         "results": results,
     }, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    rates = build_rates(cache, items_cache)
+    RATES.write_text(json.dumps({
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "tenders": len(items_cache),
+        "items": rates,
+    }, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     with_bids = sum(1 for r in results if r.get("bidders"))
-    print(f"Looked up {len(todo)}: {ok} ok, {failed} failed. {len(results)} results, {with_bids} with bidder amounts "
-          f"({TARGET.stat().st_size / 1e6:.2f} MB).")
+    print(f"Done {ok} jobs, {failed} failed. {len(results)} results, {with_bids} with bidder amounts "
+          f"({TARGET.stat().st_size / 1e6:.2f} MB); {len(rates)} BOQ items with past rates "
+          f"from {len(items_cache)} tenders ({RATES.stat().st_size / 1e6:.2f} MB).")
 
 
 if __name__ == "__main__":
