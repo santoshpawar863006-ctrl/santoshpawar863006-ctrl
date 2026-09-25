@@ -33,13 +33,17 @@ API = "https://kppp.karnataka.gov.in/supplier-registration-service/v1/api/portal
 SEARCH = {"WORKS": "works/search-eproc-tenders", "GOODS": "search-eproc-tenders", "SERVICES": "services/search-eproc-tenders"}
 FULL_VIEW = {"WORKS": "works-tender-full-view", "GOODS": "goods-tender-full-view", "SERVICES": "service-tender-full-view"}
 
-# How far back to list awarded tenders (newest first), and how many new ones to look up per run.
-LIST_LIMIT = {"WORKS": int(os.getenv("RESULTS_WORKS_LIMIT", "6000")),
-              "GOODS": int(os.getenv("RESULTS_GOODS_LIMIT", "1500")),
-              "SERVICES": int(os.getenv("RESULTS_SERVICES_LIMIT", "1500"))}
+# Pages of 100 awarded tenders (newest first) to list per run. KPPP takes ~40s per page, so this
+# is kept small; each run first catches up on newly awarded tenders, then spends what is left on
+# older pages, continuing from where the last run stopped (data/results-state.json).
+LIST_PAGES = {"WORKS": int(os.getenv("RESULTS_WORKS_PAGES", "6")),
+              "GOODS": int(os.getenv("RESULTS_GOODS_PAGES", "1")),
+              "SERVICES": int(os.getenv("RESULTS_SERVICES_PAGES", "1"))}
 MAX_LOOKUPS = int(os.getenv("RESULTS_MAX_LOOKUPS", "1200"))
-# Stop starting new lookups after this many seconds so the run always saves what it has.
+# Stop listing / starting lookups after this many seconds (from the start of the run) so the
+# run always finishes and saves what it has.
 TIME_BUDGET = int(os.getenv("RESULTS_TIME_BUDGET", "1200"))
+STATE = Path("data/results-state.json")
 WORKERS = int(os.getenv("RESULTS_WORKERS", "6"))
 PAGE_SIZE = 100
 
@@ -60,19 +64,36 @@ def make_session():
     return session
 
 
-def list_awarded(session, category):
-    rows, page = [], 0
-    while len(rows) < LIST_LIMIT[category]:
-        response = session.post(
-            f"{API}/{SEARCH[category]}?page={page}&size={PAGE_SIZE}&order-by-tender-publish=true",
-            json={"category": category, "status": "AWARDED", "title": ""}, headers=HEADERS, timeout=60)
-        response.raise_for_status()
-        batch = response.json() or []
+def list_page(session, category, page):
+    response = session.post(
+        f"{API}/{SEARCH[category]}?page={page}&size={PAGE_SIZE}&order-by-tender-publish=true",
+        json={"category": category, "status": "AWARDED", "title": ""}, headers=HEADERS, timeout=90)
+    response.raise_for_status()
+    return response.json() or []
+
+
+def list_awarded(session, category, cache, state, out_of_time):
+    """Newly awarded tenders first (until a page is already fully known), then older pages."""
+    rows, budget = [], LIST_PAGES[category]
+    page = 0
+    while budget > 0 and not out_of_time():
+        batch = list_page(session, category, page)
+        budget -= 1
+        rows.extend(batch)
+        if not batch or all(str(r.get("nitId")) in cache for r in batch):
+            break
+        page += 1
+    # Spend what is left of this run's pages further back in history.
+    cursor = max(state.get(category, 1), page + 1)
+    while budget > 0 and not out_of_time():
+        batch = list_page(session, category, cursor)
+        budget -= 1
         if not batch:
             break
         rows.extend(batch)
-        page += 1
-    return rows[:LIST_LIMIT[category]]
+        cursor += 1
+    state[category] = cursor
+    return rows
 
 
 def clean(value):
@@ -244,32 +265,39 @@ def main():
     session = make_session()
     cache = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
     items_cache = json.loads(ITEMS_CACHE.read_text(encoding="utf-8")) if ITEMS_CACHE.exists() else {}
-    todo = []
+    state = json.loads(STATE.read_text(encoding="utf-8")) if STATE.exists() else {}
+    started = time.monotonic()
+    out_of_time = lambda: time.monotonic() - started > TIME_BUDGET
+    todo, seen = [], set()
     for category in SEARCH:
         try:
-            listed = list_awarded(session, category)
+            listed = list_awarded(session, category, cache, state, out_of_time)
         except Exception as exc:
-            print(f"Could not list awarded {category}: {exc}")
+            print(f"Could not list awarded {category}: {exc}", flush=True)
             continue
-        print(f"{category}: {len(listed)} awarded tenders listed", flush=True)
-        todo.extend((category, raw) for raw in listed if raw.get("nitId") and str(raw["nitId"]) not in cache)
+        print(f"{category}: {len(listed)} awarded tenders listed ({int(time.monotonic() - started)}s)", flush=True)
+        for raw in listed:
+            nit = str(raw.get("nitId") or "")
+            if nit and nit not in cache and nit not in seen:
+                seen.add(nit)
+                todo.append((category, raw))
     # Works results collected before item rates were stored only need their statement re-read.
     backfill = [nit for nit, r in cache.items() if r.get("cat") == "WORKS" and r.get("bidders") and nit not in items_cache]
     todo = todo[:MAX_LOOKUPS]
     backfill = backfill[:max(0, MAX_LOOKUPS - len(todo))]
     print(f"{len(todo)} new results to look up, {len(backfill)} item-rate backfills", flush=True)
 
-    started = time.monotonic()
     ok = failed = 0
 
     def save():
         CACHE.parent.mkdir(parents=True, exist_ok=True)
         CACHE.write_text(json.dumps(cache, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        STATE.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
         ITEMS_CACHE.write_text(json.dumps(items_cache, ensure_ascii=False, sort_keys=True, separators=(",", ":")), encoding="utf-8")
 
     def guarded(job):
         # Jobs queued after the time budget are skipped, not started.
-        if time.monotonic() - started > TIME_BUDGET:
+        if out_of_time():
             return None
         kind, cat, payload = job
         if kind == "new":
