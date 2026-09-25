@@ -12,7 +12,8 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#039;'}[c]));
 const num = (v) => { const n = Number(String(v ?? '').replace(/[₹,]/g, '').trim()); return Number.isFinite(n) ? n : null; };
-const money = (v, fallback='Refer tender') => { const n = num(v); return n === null ? fallback : '₹' + n.toLocaleString('en-IN', {maximumFractionDigits: 2}); };
+// KPPP leaves EMD/fee blank (not zero) when unpublished, so treat 0 as missing rather than ₹0.
+const money = (v, fallback='Refer tender') => { const n = num(v); return n === null || n <= 0 ? fallback : '₹' + n.toLocaleString('en-IN', {maximumFractionDigits: 2}); };
 const fmt = (v) => Number(v || 0).toLocaleString('en-IN');
 const text = (v, fallback='Not available') => (v === null || v === undefined || v === '') ? fallback : String(v);
 const first = (obj, keys, fallback=null) => { for (const k of keys) if (obj && obj[k] !== null && obj[k] !== undefined && obj[k] !== '') return obj[k]; return fallback; };

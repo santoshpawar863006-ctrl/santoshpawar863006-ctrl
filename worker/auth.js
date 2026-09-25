@@ -168,8 +168,14 @@ async function hmacSign(secret, data) {
   return b64url(sig);
 }
 
+// No hardcoded fallback: a public default would let anyone forge admin sessions.
+function sessionSecret(env) {
+  return String(env.SESSION_SECRET || env.ADMIN_PASSWORD || '').trim();
+}
+
 async function createSessionToken(env, user) {
-  const secret = String(env.SESSION_SECRET || env.ADMIN_PASSWORD || 'kppp-local-session-secret').trim();
+  const secret = sessionSecret(env);
+  if (!secret) throw new Error('SESSION_SECRET is not configured on this Worker.');
   const header = b64url(new TextEncoder().encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' })));
   const now = Math.floor(Date.now() / 1000);
   const payload = b64url(new TextEncoder().encode(JSON.stringify({
@@ -187,7 +193,8 @@ async function createSessionToken(env, user) {
 async function verifySessionToken(env, token) {
   if (!token || token.split('.').length !== 3) return null;
   const [header, payload, sig] = token.split('.');
-  const secret = String(env.SESSION_SECRET || env.ADMIN_PASSWORD || 'kppp-local-session-secret').trim();
+  const secret = sessionSecret(env);
+  if (!secret) return null;
   const expected = await hmacSign(secret, `${header}.${payload}`);
   if (expected !== sig) return null;
   try {
