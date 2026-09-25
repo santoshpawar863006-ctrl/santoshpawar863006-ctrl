@@ -1,8 +1,6 @@
 'use strict';
 
 (() => {
-  const sourceCache = new Map();
-  const sourceInflight = new Map();
   let currentKey = '';
 
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
@@ -32,7 +30,12 @@
     catch { return null; }
   };
   const currentTender = () => tenderForKey(currentKey);
-  const sourceName = (s) => ({tenderkart:'TenderKart',bidassist:'BidAssist',tendersplus:'TendersPlus'}[String(s||'').toLowerCase()] || String(s||'Public source'));
+  // TenderKart blocks automated lookups with a bot check, so link out and let the
+  // contractor's own browser open the search instead of fetching it server-side.
+  function tenderKartSearchUrl(t){
+    const ref=String(t?.ref_no||t?.id||'').trim();
+    return 'https://www.google.com/search?q='+encodeURIComponent(`site:tenderkart.in "${ref}"`);
+  }
 
   function installSourceButtons(){
     const close=document.getElementById('modalClose');
@@ -40,155 +43,13 @@
     const wrap=document.createElement('div');
     wrap.id='sourceSearchButtons';
     wrap.className='source-search-buttons';
-    wrap.innerHTML=`
-      <button type="button" class="source-search-btn tenderkart" data-stable-source="tenderkart">TenderKart</button>
-      <button type="button" class="source-search-btn bidassist" data-stable-source="bidassist">BidAssist</button>
-      <button type="button" class="source-search-btn tendersplus" data-stable-source="tendersplus">TendersPlus</button>`;
+    wrap.innerHTML=`<a class="source-search-btn tenderkart" id="tenderKartSearchLink" href="#" target="_blank" rel="noopener noreferrer" title="Opens a search for this tender number on TenderKart in a new tab">Search on TenderKart ↗</a>`;
     close.parentElement?.insertBefore(wrap,close);
-    wrap.addEventListener('click', async e => {
-      const btn=e.target.closest('[data-stable-source]'); if(!btn) return;
-      const tender=currentTender(); if(!tender) return;
-      const source=btn.dataset.stableSource;
-      const original=sourceName(source);
-      btn.disabled=true; btn.textContent=original+'…';
-      try{
-        const payload=await fetchSource(tender,source);
-        if(source==='tenderkart') renderTenderKart(tender,firstSource(payload,'tenderkart'));
-        else renderManualSource(tender,source,payload);
-      } finally {
-        btn.disabled=false; btn.textContent=original;
-      }
-    });
   }
 
-  function paramsFor(t,source){
-    return new URLSearchParams({
-      tender:String(t.ref_no||t.id||'').trim(),
-      title:String(t.title||''),
-      department:String(t.department||''),
-      location:String(t.location||t.derived_city||t.district||''),
-      source
-    });
-  }
-
-  async function fetchSource(t,source){
-    const ref=String(t.ref_no||t.id||'').trim();
-    const cacheKey=source+'|'+ref;
-    if(sourceCache.has(cacheKey)) return sourceCache.get(cacheKey);
-    if(sourceInflight.has(cacheKey)) return sourceInflight.get(cacheKey);
-    const promise=(async()=>{
-      const controller=new AbortController();
-      const timer=setTimeout(()=>controller.abort(),20000);
-      try{
-        const r=await fetch('/api/public_tender_detail?'+paramsFor(t,source).toString(),{cache:'no-store',signal:controller.signal});
-        const data=r.ok ? await r.json() : {success:false,sources:[]};
-        sourceCache.set(cacheKey,data);
-        return data;
-      } catch {
-        const data={success:false,sources:[]};
-        sourceCache.set(cacheKey,data);
-        return data;
-      } finally {
-        clearTimeout(timer); sourceInflight.delete(cacheKey);
-      }
-    })();
-    sourceInflight.set(cacheKey,promise);
-    return promise;
-  }
-
-  function firstSource(payload,expected){
-    const wanted=String(expected||'').toLowerCase();
-    return (Array.isArray(payload?.sources)?payload.sources:[]).find(x=>String(x?.source||'').toLowerCase()===wanted)||null;
-  }
-
-  function metric(label,value){ return `<div class="tk-metric"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`; }
-  function rows(items){
-    const good=items.filter(([,v])=>v!==null&&v!==undefined&&v!==''&&v!=='Not available');
-    return good.length?`<div class="tk-detail-grid">${good.map(([k,v])=>`<div class="tk-detail-cell"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('')}</div>`:'';
-  }
-  function numbered(title,items){
-    if(!Array.isArray(items)||!items.length) return '';
-    return `<section class="tk-subsection"><div class="tk-subhead"><h4>${esc(title)}</h4><span>${items.length}</span></div><div class="tk-table-wrap"><table class="tk-table"><tbody>${items.map((x,i)=>`<tr><td>${i+1}</td><td>${esc(x)}</td></tr>`).join('')}</tbody></table></div></section>`;
-  }
-
-  function documentLabel(item){
-    if(typeof item === 'string') return item;
-    if(item && typeof item === 'object'){
-      return String(item.label || item.name || item.document_name || item.title || '').trim();
-    }
-    return String(item || '').trim();
-  }
-
-  function tenderDocumentsSection(items, tenderKartUrl){
-    if(!Array.isArray(items)||!items.length) return '';
-    const safeUrl=String(tenderKartUrl||'').startsWith('http')?tenderKartUrl:'';
-    const note = safeUrl
-      ? 'File names come from TenderKart’s public data. To download the real PDFs/ZIP, open TenderKart, sign in there, then download.'
-      : 'File names are listed below. Open the matched TenderKart page (when available) to sign in and download.';
-    const headAction = safeUrl
-      ? `<a href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer" class="tk-doc-open-all">Open tender on TenderKart to download ↗</a>`
-      : '';
-    const rows = items.map((item,i)=>{
-      const label=documentLabel(item) || `Document ${i+1}`;
-      const action = safeUrl
-        ? `<a href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer" class="tk-doc-download">Download on TenderKart ↗</a>`
-        : `<span class="tk-doc-unavailable">TenderKart link unavailable</span>`;
-      return `<tr><td>${i+1}</td><td><div class="tk-doc-name">${esc(label)}</div><div class="tk-doc-hint">Sign in on TenderKart if prompted</div></td><td class="tk-doc-action">${action}</td></tr>`;
-    }).join('');
-    return `<section class="tk-subsection tk-docs-section">
-      <div class="tk-subhead">
-        <div>
-          <h4>Tender Document Files</h4>
-          <p class="tk-docs-note">${esc(note)}</p>
-        </div>
-        <div class="tk-docs-head-actions"><span>${items.length}</span>${headAction}</div>
-      </div>
-      <div class="tk-table-wrap"><table class="tk-table tk-docs-table"><thead><tr><th>#</th><th>Document</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>
-    </section>`;
-  }
-
-  function renderTenderKart(tender,source){
-    const host=document.getElementById('tenderKartPrimaryHost');
-    if(!host) return;
-    const ref=String(tender.ref_no||tender.id||'');
-    if(!source){
-      if(host.dataset.tenderRef===ref) host.innerHTML='';
-      return;
-    }
-    const s=source.signals||{};
-    const safeUrl=String(source.url||'').startsWith('http')?source.url:'#';
-    const hasTkUrl=String(source.url||'').startsWith('http');
-    host.dataset.tenderRef=ref;
-    host.innerHTML=`<section class="detail-section tk-primary-section">
-      <div class="tk-primary-head"><div><div class="tk-eyebrow">VERIFIED TENDERKART ENRICHMENT</div><h3>TenderKart Details</h3><p>Loaded once into a separate stable area. KPPP details below are not rebuilt when this section loads.</p></div><a href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer" class="tk-source-link">Open TenderKart ↗</a></div>
-      <div class="tk-metric-grid">${metric('Tender Value',money(s.tender_value))}${metric('EMD',money(s.emd))}${metric('Tender Fee',money(s.tender_fee))}${metric('Tender Class',s.tender_class||'Not available')}${metric('Reservation',s.reservation||'Not available')}${metric('KPWD / PWD Class',s.kpwd_class||'Not available')}</div>
-      <section class="tk-subsection"><div class="tk-subhead"><h4>Tender Summary</h4></div>${rows([
-        ['Tender Number',ref],['NIT ID',s.nit_id],['Category',s.tender_category||tender.category],['Product Category',s.product_category],['Form of Contract',s.form_of_contract],['Bid Value Type',s.bid_value_type],['Location',s.location||tender.location||tender.derived_city],['Bid Validity',s.bid_validity_days?`${s.bid_validity_days} days`:null]
-      ])}${s.work_description?`<div class="tk-description"><span>Work Description</span><p>${esc(s.work_description)}</p></div>`:''}</section>
-      ${numbered('Mandatory Documents / Certificates',s.documents_required)}
-      ${numbered('Technical Criteria',s.technical_criteria)}
-      ${numbered('Eligibility Conditions',s.eligibility)}
-      ${tenderDocumentsSection(s.tender_documents, hasTkUrl ? source.url : '')}
-      ${numbered('BOQ / Work Item Preview',s.boq_preview)}
-      <div class="tk-source-foot">Source: <strong>TenderKart</strong> • ${esc(source.match_method||'verified tender match')} • Cross-check with KPPP before bidding. Document downloads require TenderKart login on their site.</div>
-    </section>`;
-  }
-
-  function renderManualSource(tender,sourceKey,payload){
-    const body=document.getElementById('enrichmentExtraHost') || document.getElementById('modalBody'); if(!body) return;
-    const cls='stable-manual-'+sourceKey;
-    body.querySelector('.'+cls)?.remove();
-    const source=firstSource(payload,sourceKey);
-    const display=sourceName(sourceKey);
-    if(!source){
-      body.insertAdjacentHTML('beforeend',`<section class="detail-section public-web-section ${cls}"><div class="section-title"><h3>${esc(display)} Search</h3><span class="count-chip">No verified match</span></div><div class="empty-block">No verified public ${esc(display)} match was found for this exact tender. Existing KPPP/TenderKart details are unchanged.</div></section>`);
-      try { window.KPPPDetailLayout?.scheduleOrganize?.(); } catch {}
-      return;
-    }
-    const s=source.signals||{};
-    const safeUrl=String(source.url||'').startsWith('http')?source.url:'#';
-    body.insertAdjacentHTML('beforeend',`<section class="detail-section public-web-section ${cls}"><div class="section-title"><h3>${esc(display)} Public Data</h3><span class="count-chip">Verified match</span></div><div class="public-source-card"><div class="public-source-head"><div><strong>${esc(source.title||display)}</strong><small>${esc(source.match_method||'verified match')}</small></div><a href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">Open ${esc(display)} ↗</a></div>${rows([['Tender Value',money(s.tender_value)],['EMD',money(s.emd)],['Tender Fee',money(s.tender_fee)],['Tender Class',s.tender_class],['Reservation',s.reservation],['Location',s.location]])}</div></section>`);
-    try { window.KPPPDetailLayout?.scheduleOrganize?.(); } catch {}
+  function updateSourceLink(t){
+    const link=document.getElementById('tenderKartSearchLink');
+    if(link) link.href=tenderKartSearchUrl(t);
   }
 
   function readiness(t){
@@ -223,24 +84,16 @@
     try { window.KPPPDetailLayout?.scheduleOrganize?.(); } catch {}
   }
 
-  async function loadTenderKartOnce(t,key){
-    const payload=await fetchSource(t,'tenderkart');
-    if(currentKey!==key || !document.getElementById('detailModal')?.classList.contains('open')) return;
-    renderTenderKart(t,firstSource(payload,'tenderkart'));
-  }
-
   function wrapOpenDetails(){
     if(window.__stableModalController || typeof window.openDetails!=='function') return false;
     const base=window.openDetails;
     window.openDetails=async function(key){
       currentKey=String(key||'');
-      const host=document.getElementById('tenderKartPrimaryHost');
-      if(host){ host.innerHTML=''; delete host.dataset.tenderRef; }
       const result=await base(key);
       const t=tenderForKey(currentKey);
       if(t){
         renderReadiness(t);
-        loadTenderKartOnce(t,currentKey);
+        updateSourceLink(t);
       }
       return result;
     };

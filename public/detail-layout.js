@@ -6,7 +6,7 @@
   function $(id){ return document.getElementById(id); }
 
   function setTab(name){
-    const tab = String(name || 'enrichment');
+    const tab = String(name || 'summary');
     document.querySelectorAll('.detail-tab').forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.tab === tab);
     });
@@ -127,7 +127,7 @@
     if (window.__detailLayoutWrapped || typeof window.openDetails !== 'function') return false;
     const base = window.openDetails;
     window.openDetails = async function(key){
-      setTab('enrichment');
+      setTab('summary');
       ['summaryOverviewHost','summaryReadinessHost','enrichmentExtraHost','bidPanelHost','modalBody'].forEach((id) => {
         const el = $(id); if (el) el.innerHTML = '';
       });

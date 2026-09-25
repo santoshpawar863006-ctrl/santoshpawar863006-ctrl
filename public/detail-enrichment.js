@@ -25,9 +25,10 @@ function renderListingFallback(t, loading=false, message=''){
   const deptId=first(r,['deptId']);
   const status=first(r,['statusText','status'],t.status_text||t.status);
 
+  // The Cloudflare runtime has no KPPP full-view, so the "not available" message is expected; don't show it.
   const banner = loading
     ? '<div class="live-banner loading"><span class="spinner"></span> Loading additional KPPP detail…</div>'
-    : (message ? `<div class="live-banner warning">ℹ ${esc(message)} Showing all details already available in the KPPP tender feed.</div>` : '');
+    : '';
 
   return `${banner}
     <section class="detail-section detail-overview">

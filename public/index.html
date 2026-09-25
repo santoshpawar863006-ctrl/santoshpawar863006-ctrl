@@ -13,7 +13,7 @@
 <link rel="stylesheet" href="/workspace.css?v=20260812a">
 <link rel="stylesheet" href="/analysis-tools.css?v=20260812a">
 <link rel="stylesheet" href="/bid-intelligence.css?v=20260812a">
-<link rel="stylesheet" href="/public-web-enrichment.css?v=20260812d">
+<link rel="stylesheet" href="/public-web-enrichment.css?v=20260925a">
 <link rel="stylesheet" href="/tenderkart-stability.css?v=20260814e">
 <link rel="stylesheet" href="/system-health.css?v=20260812a">
 <link rel="stylesheet" href="/emd-enrichment.css?v=20260812c">
@@ -91,7 +91,7 @@
   </section>
 
   <section class="results" id="resultsPanel">
-    <div class="results-head"><strong id="resultCount">Loading…</strong><span class="sync">Use View Details to open the tender; TenderKart enrichment loads where available</span></div>
+    <div class="results-head"><strong id="resultCount">Loading…</strong><span class="sync">Use View Details to open the tender</span></div>
     <div class="table-wrap">
       <table class="tender-table">
         <thead>
@@ -116,18 +116,12 @@
       <button class="modal-close" id="modalClose" aria-label="Close">×</button>
     </div>
     <nav class="detail-tabs" id="detailTabs" aria-label="Tender detail sections">
-      <button type="button" class="detail-tab active" data-tab="enrichment">Enrichment</button>
-      <button type="button" class="detail-tab" data-tab="summary">Summary</button>
+      <button type="button" class="detail-tab active" data-tab="summary">Summary</button>
       <button type="button" class="detail-tab" data-tab="bid">Bid plan</button>
       <button type="button" class="detail-tab" data-tab="specs">Full specs</button>
     </nav>
     <div class="detail-panels">
-      <div class="detail-panel active" id="panel-enrichment" data-panel="enrichment">
-        <div id="tenderKartPrimaryHost" class="tenderkart-primary-host"></div>
-        <div id="enrichmentExtraHost"></div>
-        <div class="detail-empty soft" id="enrichmentEmptyHint">Verified TenderKart and public enrichment will appear here.</div>
-      </div>
-      <div class="detail-panel" id="panel-summary" data-panel="summary">
+      <div class="detail-panel active" id="panel-summary" data-panel="summary">
         <div id="summaryReadinessHost"></div>
         <div id="summaryOverviewHost"></div>
         <div class="detail-empty" id="summaryEmptyHint">Open a tender to see the executive summary.</div>
@@ -143,18 +137,17 @@
   </div>
 </div>
 
-<script src="/app.js?v=20260812b" defer></script>
-<script src="/detail-enrichment.js?v=20260814a" defer></script>
+<script src="/app.js?v=20260925a" defer></script>
+<script src="/detail-enrichment.js?v=20260925a" defer></script>
 <script src="/workspace.js?v=20260812a" defer></script>
-<script src="/tender-class-filter.js?v=20260812a" defer></script>
+<script src="/tender-class-filter.js?v=20260925a" defer></script>
 <script src="/filter-quality.js?v=20260812a" defer></script>
 <script src="/analysis-tools.js?v=20260812a" defer></script>
 <script src="/amount-fix.js?v=20260812b" defer></script>
-<script src="/modal-stability.js?v=20260814f" defer></script>
-<script src="/system-health.js?v=20260814c" defer></script>
-<script src="/missing-financial-enrichment.js?v=20260812c" defer></script>
+<script src="/modal-stability.js?v=20260925a" defer></script>
+<script src="/system-health.js?v=20260925a" defer></script>
 <script src="/tender-list-experience.js?v=20260812b" defer></script>
-<script src="/bid-calculator.js?v=20260814e" defer></script>
-<script src="/detail-layout.js?v=20260814b" defer></script>
+<script src="/bid-calculator.js?v=20260925a" defer></script>
+<script src="/detail-layout.js?v=20260925a" defer></script>
 </body>
 </html>

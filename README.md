@@ -12,31 +12,22 @@ Open the **exact Worker that serves your live URL** (check the hostname / Worker
 
 | Name | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Claude bid calculator |
 | `ADMIN_USERNAME` | Bootstrap admin login |
 | `ADMIN_PASSWORD` | Bootstrap admin password |
 | `ADMIN_NAME` | Display name |
 | `SESSION_SECRET` | Random string (`openssl rand -base64 48`) |
 
-### Verify the key is on the right Worker
-
-After deploy, open:
-
-`https://YOUR-WORKER.workers.dev/api/debug/env`
-
-You should see `"ANTHROPIC_API_KEY": true`. If it is `false`, the secret is on a different Worker or only set as a Build variable.
-
-Also check **System Health** in the app — it now shows Claude + secret binding status.
+Open **System Health** in the app to check the **Secret Bindings** card: it shows whether the admin password, session secret and login storage are set on this Worker.
 
 `wrangler.jsonc` sets `keep_vars: true` so dashboard variables are not wiped on Git deploys.
 
 Locally, copy `.dev.vars.example` → `.dev.vars` (never commit `.dev.vars`).
 
-## Why Cloudflare can look emptier than localhost (`KPPP-NEEWWW` on :8787)
+## Tender data
 
-1. **Claude** — localhost reads `.dev.vars`; Cloudflare only sees Worker runtime secrets on that script.
-2. **TenderKart enrichment** — fills many “Refer tender” cells. TenderKart often bot-blocks Cloudflare Workers; localhost may still show old browser `localStorage` cache.
-3. Base tender list still comes from the GitHub collector / deployed `tenders.json`.
+- The hourly GitHub Action (`.github/workflows/collect-kppp.yml`) collects tenders from KPPP and commits `public/tenders.json` + `public/health.json`; the Worker reads them from this repo and falls back to the deployed copy.
+- KPPP's public tender list does not include EMD or tender fee, and some departments hide the tender value, so those columns can be empty.
+- TenderKart blocks automated lookups with a bot check, so the tender popup links to a TenderKart search instead of loading its data.
 
 ## Notes
 
