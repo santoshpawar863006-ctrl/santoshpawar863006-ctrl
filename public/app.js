@@ -493,7 +493,7 @@
       ['Bid validity', f.terms.validityDays ? `${f.terms.validityDays} days` : ''],
       ['Call', f.terms.call ? `Call ${f.terms.call}${f.terms.retender ? ' (re-tender)' : ''}` : ''],
       ['Technical weightage', f.terms.techWeight ? `${f.terms.techWeight}%` : ''],
-      ['Tender value (approved amount)', num(f.money.provisional) ? money(f.money.provisional, { full: true }) : ''],
+      ['Sanctioned budget', num(f.money.provisional) ? `${money(f.money.provisional, { full: true })}<small class="fact-note">Total amount approved for the project (includes GST, contingencies etc.). You bid against the tender value, not this.</small>` : ''],
       ['File number', esc(f.fileNumber)],
       ['Department', esc(t.dept)],
       ['Office', esc(t.office)]
