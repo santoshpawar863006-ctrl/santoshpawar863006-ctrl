@@ -36,7 +36,6 @@
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--font);-webkit-font-smoothing:antialiased}
-html.auth-pending body{visibility:hidden}
 button,input,select{font:inherit;color:inherit}
 button{cursor:pointer}
 a{color:var(--brand)}
@@ -54,12 +53,6 @@ a{color:var(--brand)}
 .topbar-inner{display:flex;align-items:center;gap:10px}
 .icon-btn{display:inline-grid;place-items:center;width:38px;height:38px;border-radius:10px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.1);color:#fff}
 .icon-btn:hover{background:rgba(255,255,255,.18)}
-.auth-user-menu{display:flex;align-items:center;gap:10px}
-.auth-user-meta{display:flex;flex-direction:column;align-items:flex-end;line-height:1.2}
-.auth-user-meta strong{font-size:13px}
-.auth-user-meta span{font-size:11px;opacity:.7}
-.auth-menu-link,.auth-menu-btn{border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.1);color:#fff;border-radius:10px;padding:8px 12px;font-size:12.5px;font-weight:700;text-decoration:none}
-.auth-menu-link:hover,.auth-menu-btn:hover{background:rgba(255,255,255,.2)}
 
 .hero-copy{margin-top:34px;max-width:760px}
 .hero-copy h1{margin:0;font-size:clamp(28px,4.2vw,44px);line-height:1.08;letter-spacing:-.035em;font-weight:800}
@@ -203,54 +196,6 @@ dialog::backdrop{background:rgba(8,10,30,.5);backdrop-filter:blur(3px)}
 .toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:13.5px;font-weight:700;opacity:0;transition:.2s;z-index:60;pointer-events:none}
 .toast.show{opacity:1;transform:translate(-50%,0)}
 
-/* ---------- Login ---------- */
-.auth-page{min-height:100vh;display:grid;grid-template-columns:1.1fr 1fr}
-.auth-side{background:var(--hero);color:#fff;padding:40px clamp(24px,5vw,64px);display:flex;flex-direction:column;justify-content:space-between;gap:40px}
-.auth-side h1{font-size:clamp(30px,3.6vw,46px);line-height:1.08;letter-spacing:-.035em;margin:0 0 14px;font-weight:800}
-.auth-side p{opacity:.82;font-size:16px;max-width:46ch;margin:0}
-.auth-points{display:grid;gap:12px;margin-top:30px}
-.auth-points div{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;border-radius:14px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14)}
-.auth-points b{display:block;font-size:14.5px}
-.auth-points span{font-size:13px;opacity:.75}
-.auth-main{display:grid;place-items:center;padding:32px 20px}
-.auth-card{width:min(400px,100%)}
-.auth-card h2{font-size:28px;letter-spacing:-.03em;margin:0 0 6px}
-.auth-card .lede{color:var(--muted);margin:0 0 26px}
-.auth-card .field{margin-bottom:14px}
-.auth-card .field input{height:48px;border-radius:12px;border:1px solid var(--line);padding:0 14px;background:var(--surface);font-size:15px}
-.auth-card .btn{width:100%;height:50px;font-size:15px;margin-top:6px}
-.auth-status{min-height:20px;margin-top:12px;font-size:13.5px;font-weight:700;color:var(--danger)}
-.auth-status.ok{color:var(--ok)}
-
-/* ---------- Admin ---------- */
-.admin-body .hero{padding-bottom:40px}
-.admin-shell{display:grid;gap:16px;margin-top:-24px;position:relative;padding-bottom:40px}
-.admin-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px}
-.admin-card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:14px}
-.admin-card-head h2{margin:0;font-size:19px;letter-spacing:-.02em}
-.admin-card-head p{margin:4px 0 0;color:var(--muted);font-size:13.5px}
-.admin-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.admin-form label{display:grid;gap:6px;font-size:12.5px;font-weight:700;color:var(--ink-2)}
-.admin-form input,.admin-form select,.pwd-input{width:100%;height:42px;border:1px solid var(--line);border-radius:10px;padding:0 12px;background:var(--surface-2)}
-.admin-primary,.admin-secondary,.admin-danger{border-radius:10px;padding:9px 14px;font-weight:700;border:1px solid var(--line);background:var(--surface)}
-.admin-primary{margin-top:14px;border:0;background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff}
-.admin-danger{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 35%,var(--line))}
-.admin-status{min-height:18px;margin-top:10px;font-size:13px;font-weight:700;color:var(--danger)}
-.admin-status.ok{color:var(--ok)}
-.admin-table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px}
-.admin-table{width:100%;border-collapse:collapse;min-width:820px}
-.admin-table th{text-align:left;background:var(--surface-2);color:var(--muted);font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;padding:11px 12px}
-.admin-table td{padding:12px;border-top:1px solid var(--line);vertical-align:middle;font-size:13.5px}
-.admin-table .muted{color:var(--muted);font-size:12px;margin-top:2px}
-.pill{display:inline-flex;border-radius:999px;padding:3px 9px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
-.pill.admin{background:var(--brand-soft);color:var(--brand)}
-.pill.user{background:var(--surface-2);color:var(--ink-2)}
-.pill.active{background:var(--ok-soft);color:var(--ok)}
-.pill.inactive{background:var(--danger-soft);color:var(--danger)}
-.pwd-row{display:flex;gap:8px;align-items:center}
-.pwd-row .pwd-input{min-width:150px}
-.admin-table .actions{display:flex;gap:8px;flex-wrap:wrap}
-
 /* ---------- Responsive ---------- */
 @media (max-width:1000px){
   .stats{grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -261,8 +206,7 @@ dialog::backdrop{background:rgba(8,10,30,.5);backdrop-filter:blur(3px)}
   .hero{padding-bottom:78px}
   .hero-copy{margin-top:22px}
   .hero-copy p{font-size:14.5px}
-  .auth-user-meta,.brand small{display:none}
-  .auth-menu-link,.auth-menu-btn{padding:7px 10px;white-space:nowrap}
+  .brand small{display:none}
   .icon-btn{width:34px;height:34px}
   .hero-copy h1{font-size:27px}
   .hero-copy p{display:none}
@@ -281,9 +225,5 @@ dialog::backdrop{background:rgba(8,10,30,.5);backdrop-filter:blur(3px)}
   .kpis{grid-template-columns:1fr 1fr}
   .facts{grid-template-columns:120px 1fr}
   .calc-grid{grid-template-columns:1fr}
-  .auth-page{grid-template-columns:1fr}
-  .auth-side{padding:28px 20px}
-  .auth-points{display:none}
-  .admin-grid{grid-template-columns:1fr}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
