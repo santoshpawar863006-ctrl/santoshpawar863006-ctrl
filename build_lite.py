@@ -92,6 +92,7 @@ def slim(tender):
     department = str(tender.get("department") or raw.get("deptName") or "").strip()
     record = {
         "id": str(tender.get("id") or raw.get("id") or ""),
+        "nit": str(raw.get("nitId") or ""),
         "ref": str(tender.get("ref_no") or raw.get("tenderNumber") or ""),
         "title": title,
         "cat": str(tender.get("category") or raw.get("category") or "").upper(),

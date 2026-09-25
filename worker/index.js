@@ -69,6 +69,154 @@ async function proxyRaw(filename, ctx, ttl = 60, env = null) {
   return response;
 }
 
+const KPPP_API = KPPP_BASE + '/supplier-registration-service/v1/api/portal-service';
+// KPPP's own tender page loads these per-category endpoints without a login.
+const SECTIONS = {
+  WORKS: { view: 'works-tender-full-view', files: 'get-works-tender-files', file: 'works-tender-file' },
+  GOODS: { view: 'goods-tender-full-view', files: 'get-goods-tender-files', file: 'goods-tender-file' },
+  SERVICES: { view: 'service-tender-full-view', files: 'get-services-tender-files', file: 'services-tender-file' }
+};
+const KPPP_HEADERS = {
+  Accept: 'application/json, text/plain, */*',
+  Origin: KPPP_BASE,
+  Referer: KPPP_BASE + '/',
+  Post: 'CONTRACTOR-EPROC-CONTRACTOR',
+  'User-Agent': USER_AGENT
+};
+
+async function kpppJson(path) {
+  const response = await fetch(`${KPPP_API}/${path}`, { headers: KPPP_HEADERS, cf: { cacheTtl: 1800, cacheEverything: true } });
+  if (!response.ok) throw new Error(`KPPP returned HTTP ${response.status}`);
+  return response.json();
+}
+
+const clean = (v) => {
+  const text = String(v ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return text || null;
+};
+const amount = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
+};
+const list = (v) => (Array.isArray(v) ? v : []);
+
+// Reshape KPPP's full view into only what the tender page shows.
+function shapeTender(category, full, files, nitId) {
+  const nit = full.noticeInvitingTenderDTO || {};
+  const sched = full.tenderSchedule || {};
+  const addr = full.tenderAddress || {};
+  const eligibility = [...list(full.generalCriterionList), ...list(full.tenderEligibilityCriterionList)]
+    .filter((c) => !c.criterionType || c.criterionType === 'ELIGIBILITY')
+    .map((c) => clean(c.description)).filter(Boolean);
+  const technical = [...list(full.technicalCriterionList), ...list(full.tenderTechnicalCriterionList)].map((c) => ({
+    category: clean(c.criterionCategoryText),
+    text: clean(c.criterionTypeOthersValue && c.criterionCategoryText === 'Others' ? c.criterionTypeOthersValue : c.description),
+    weight: amount(c.weight),
+    documents: list(c.tenderTechnicalCriterionDocumentList).map((d) => clean(d.documentName)).filter(Boolean)
+  })).filter((c) => c.text);
+  const documents = list(full.tenderCriterionDocumentList).map((d) => ({
+    name: clean(d.documentName), cover: clean(d.documentTypeText), optional: Boolean(d.optional)
+  })).filter((d) => d.name);
+
+  let groups = [];
+  if (category === 'WORKS') {
+    groups = list(full.tenderSubEstimateList).map((g) => ({
+      name: clean(g.subEstimateName), note: clean(g.workCategoryName), total: amount(g.estimateTotal),
+      items: list(g.itemList).filter((i) => !i.hideYn).map((i) => ({
+        code: clean(i.itemCode), section: clean(i.categoryName), name: clean(i.description),
+        qty: amount(i.quantity), unit: clean(i.uomName), rate: amount(i.finalRate ?? i.baseRate), amount: amount(i.netAmount)
+      }))
+    }));
+  } else {
+    groups = list(full.tenderGroups).map((g) => ({
+      name: clean(g.groupName === 'Default' ? null : g.groupName), total: null,
+      items: list(g.itemList).map((i) => ({
+        code: clean(i.itemCode), name: clean(i.itemName), spec: clean(i.specifications),
+        qty: amount(i.quantity), unit: clean(i.uomName || i.biddingUnit),
+        rate: amount(i.price ?? i.estimateUnitRate), amount: amount(i.netAmt ?? i.estimateItemPrice)
+      }))
+    }));
+  }
+
+  return {
+    success: true,
+    nit: String(nitId),
+    ref: clean(sched.tenderNumber),
+    description: clean(sched.description),
+    fileNumber: clean(sched.fileNumber),
+    dates: {
+      published: clean(nit.publishedDate),
+      queries: clean(nit.tenderQueryClose),
+      preBid: nit.preBidMeetingYn ? clean(nit.preBidMeetingDate) : null,
+      submission: clean(nit.tenderReceiptClose),
+      opening: clean(nit.technicalBidOpen)
+    },
+    money: {
+      emd: amount(nit.emd), emdCash: amount(nit.emdCash), emdGuarantee: amount(nit.emdBankGuarantee),
+      fee: amount(nit.tenderFee), provisional: amount(sched.provisionalAmount)
+    },
+    terms: {
+      evaluation: clean(nit.evaluationTypeText),
+      bidType: clean(nit.bidValueTypeText),
+      tax: nit.taxType ? clean(String(nit.taxType).replace(/_/g, ' ').toLowerCase()) : null,
+      validityDays: amount(nit.bidValidityPeriod),
+      call: amount(nit.noOfCalls),
+      retender: Boolean(nit.retenderedYn),
+      techWeight: nit.hideWeightage ? null : amount(nit.techWeightage)
+    },
+    contact: {
+      person: clean(nit.contactPerson),
+      mobile: clean(nit.mobileNumber),
+      address: [addr.blockNumber, addr.street, addr.area, addr.city, addr.state, addr.pin].map(clean).filter(Boolean).join(', ') || null
+    },
+    eligibility,
+    technical,
+    documents,
+    groups,
+    files: list(files).map((f) => ({
+      name: clean(f.fileName), type: clean(f.documentType),
+      url: `/api/tender-file/${category}/${nitId}/${encodeURIComponent(f.uuid)}?name=${encodeURIComponent(f.fileName || 'document')}`
+    })).filter((f) => f.name)
+  };
+}
+
+async function tenderDetail(category, nitId, ctx) {
+  const section = SECTIONS[category];
+  if (!section || !/^\d+$/.test(nitId)) return json({ success: false, message: 'Unknown tender.' }, 400);
+  const cache = caches.default;
+  const cacheKey = new Request(`https://kppp-detail.local/${category}/${nitId}`);
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+  try {
+    const [full, files] = await Promise.all([
+      kpppJson(`${nitId}/${section.view}`),
+      kpppJson(`${nitId}/${section.files}`).catch(() => [])
+    ]);
+    const response = json(shapeTender(category, full, files, nitId), 200, 'public, max-age=1800, s-maxage=1800');
+    ctx.waitUntil(cache.put(cacheKey, response.clone()));
+    return response;
+  } catch (error) {
+    return json({ success: false, message: `Could not load details from KPPP (${String(error.message || error).slice(0, 80)}).` }, 502);
+  }
+}
+
+async function tenderFile(category, nitId, uuid, name) {
+  const section = SECTIONS[category];
+  if (!section || !/^\d+$/.test(nitId) || !/^[0-9a-f-]{36}$/i.test(uuid)) return json({ success: false, message: 'Unknown file.' }, 400);
+  const upstream = await fetch(`${KPPP_API}/${nitId}/${section.file}/${uuid}/download-file`, { headers: { ...KPPP_HEADERS, Accept: '*/*' } });
+  if (!upstream.ok) return json({ success: false, message: `KPPP returned HTTP ${upstream.status} for this file.` }, 502);
+  const safeName = String(name || 'tender-document').replace(/[^\w.\- ()&]+/g, '_').slice(0, 150);
+  // KPPP sends every file as octet-stream; label PDFs so the browser can open them directly.
+  const isPdf = /\.pdf$/i.test(safeName);
+  return new Response(upstream.body, {
+    headers: {
+      'Content-Type': isPdf ? 'application/pdf' : (upstream.headers.get('content-type') || 'application/octet-stream'),
+      'Content-Disposition': `${isPdf ? 'inline' : 'attachment'}; filename="${safeName}"`,
+      'Cache-Control': 'public, max-age=86400'
+    }
+  });
+}
+
 function ageHours(value) {
   const ms = Date.parse(String(value || ''));
   if (!Number.isFinite(ms)) return null;
@@ -144,6 +292,10 @@ export default {
     }
     if (url.pathname === '/health.json') return proxyRaw('health.json', ctx, 30, env);
     if (url.pathname === '/api/system_health') return systemHealth(ctx, env);
+    const detail = url.pathname.match(/^\/api\/tender\/(WORKS|GOODS|SERVICES)\/(\d+)$/);
+    if (detail) return tenderDetail(detail[1], detail[2], ctx);
+    const file = url.pathname.match(/^\/api\/tender-file\/(WORKS|GOODS|SERVICES)\/(\d+)\/([0-9a-fA-F-]+)$/);
+    if (file) return tenderFile(file[1], file[2], file[3], url.searchParams.get('name'));
     // Old bookmarks to the removed login/admin pages go to the tender list.
     if (['/login', '/login.html', '/admin', '/admin.html'].includes(url.pathname)) {
       return Response.redirect(new URL('/', url).toString(), 301);

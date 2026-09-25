@@ -291,8 +291,23 @@
     if (S.savedOnly && !on) apply({ keepScroll: true });
   }
 
-  // ---------- Drawer ----------
+  // ---------- Tender page ----------
   let lastFocus = null;
+  const detailCache = new Map();
+
+  // KPPP full-view dates are 'dd-mm-yyyy HH:MM:SS' India time.
+  function kpppDate(v) {
+    const m = String(v || '').match(/^(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2})/);
+    return m ? Date.parse(`${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}:00+05:30`) : null;
+  }
+  const fmtKppp = (v) => { const ms = kpppDate(v); return ms ? dateFmt.format(new Date(ms)) : null; };
+  const icon = {
+    doc: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>',
+    check: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m5 12 5 5 9-10"/></svg>',
+    phone: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z"/></svg>',
+    back: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>'
+  };
+
   function openTender(id) {
     const t = S.byId.get(id);
     if (!t) return;
@@ -301,58 +316,179 @@
     const closeText = t._close ? dateFmt.format(new Date(t._close)) : 'Not given';
     const saved = S.saved.has(t.id);
     const tk = 'https://www.google.com/search?q=' + encodeURIComponent(`site:tenderkart.in "${t.ref}"`);
-    const facts = [
-      ['Tender number', `<span class="ref">${esc(t.ref)}</span>`],
-      ['Department', esc(t.dept)],
-      ['Office', esc(t.office)],
-      ['District', esc(t.district || 'Not identified')],
-      ['Work category', esc(t.work)],
-      ['Tender type', esc(t.bidType)],
-      ['Who can bid', esc(t.access)],
-      ['Published', t._pub ? esc(dateFmt.format(new Date(t._pub))) : '']
-    ].filter(([, v]) => v);
+    const place = [t.office, t.district].filter(Boolean).join(' · ');
     const d = $('drawer');
     d.innerHTML = `
-      <div class="drawer-head">
-        <div class="row">
-          <span class="badge ${esc(t.cat)}">${esc(t.cat)}</span>
-          ${t.access && t.access !== 'Open' ? `<span class="badge reserved">${esc(t.access)}</span>` : ''}
-          <button class="close" type="button" data-close aria-label="Close">✕</button>
-        </div>
-        <h2 id="dTitle">${esc(t.title)}</h2>
-        ${t.desc ? `<p>${esc(t.desc)}</p>` : ''}
-      </div>
-      <div class="drawer-body">
-        <div class="countdown ${left ? left.tone : ''}">
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/></svg>
-          <div><div class="big">${left ? esc(left.label) : 'No closing date'}</div><small>Bid submission closes ${esc(closeText)}</small></div>
-        </div>
-        <div class="kpis">
-          <div class="kpi"><span>Tender value</span><strong>${money(t.value) || '—'}</strong><small>${num(t.value) ? money(t.value, { full: true }) : 'Hidden by department'}</small></div>
-          <div class="kpi"><span>EMD</span><strong>${money(t.emd) || '—'}</strong><small>${num(t.emd) ? money(t.emd, { full: true }) : 'Check on KPPP'}</small></div>
-          <div class="kpi"><span>Tender fee</span><strong>${money(t.fee) || '—'}</strong><small>${num(t.fee) ? 'Non-refundable' : 'Check on KPPP'}</small></div>
-        </div>
-        <div class="actions">
-          <a class="btn primary" href="https://kppp.karnataka.gov.in/" target="_blank" rel="noopener">Open KPPP portal ↗</a>
-          <button class="btn" type="button" data-copy="${esc(t.ref)}">Copy tender number</button>
+      <div class="tp-bar">
+        <div class="wrap tp-bar-in">
+          <button class="btn ghost" type="button" data-close>${icon.back} Back to tenders</button>
+          <span class="spacer"></span>
+          <button class="btn" type="button" data-copy="${esc(t.ref)}">Copy tender no.</button>
           <button class="btn ${saved ? 'on' : ''}" type="button" data-save="${esc(t.id)}" aria-pressed="${saved}">${heartIcon}${saved ? ' Saved' : ' Save'}</button>
-          <a class="btn" href="${esc(tk)}" target="_blank" rel="noopener">Search on TenderKart ↗</a>
         </div>
-        <section class="panel">
-          <h3>Tender details</h3>
-          <dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
-          <p class="note">On KPPP, search this tender number to download documents and submit your bid.</p>
-        </section>
-        ${calculatorHtml(t)}
+      </div>
+      <header class="tp-hero">
+        <div class="wrap">
+          <div class="row">
+            <span class="badge ${esc(t.cat)}">${esc(t.cat)}</span>
+            ${t.access ? `<span class="badge ${t.access === 'Open' ? 'soft' : 'reserved'}">${esc(t.access)} tender</span>` : ''}
+            ${t.work ? `<span class="badge soft">${esc(t.work)}</span>` : ''}
+          </div>
+          <h2 id="dTitle">${esc(t.title)}</h2>
+          <p class="tp-sub">${esc(t.dept)}${place ? ` · ${esc(place)}` : ''}</p>
+          <p class="ref">${esc(t.ref)}</p>
+        </div>
+      </header>
+      <div class="wrap tp-grid">
+        <aside class="tp-side">
+          <div class="countdown ${left ? left.tone : ''}">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/></svg>
+            <div><div class="big">${left ? esc(left.label) : 'No closing date'}</div><small>Bid submission closes ${esc(closeText)}</small></div>
+          </div>
+          <div class="kpis">
+            <div class="kpi"><span>Tender value</span><strong>${money(t.value) || '—'}</strong><small>${num(t.value) ? money(t.value, { full: true }) : 'Not published'}</small></div>
+            <div class="kpi"><span>EMD</span><strong>${money(t.emd) || '—'}</strong><small id="emdNote">${num(t.emd) ? money(t.emd, { full: true }) : 'Not published'}</small></div>
+            <div class="kpi"><span>Tender fee</span><strong>${money(t.fee) || '—'}</strong><small>${num(t.fee) ? money(t.fee, { full: true }) : 'Not published'}</small></div>
+          </div>
+          <section class="panel" id="tpDates"><h3>Important dates</h3><dl class="facts">
+            ${t._pub ? `<dt>Published</dt><dd>${esc(dateFmt.format(new Date(t._pub)))}</dd>` : ''}
+            <dt>Bid submission ends</dt><dd>${esc(closeText)}</dd>
+          </dl></section>
+          <section class="panel" id="tpContact" hidden></section>
+          <div class="actions col">
+            <a class="btn primary" href="https://kppp.karnataka.gov.in/" target="_blank" rel="noopener">Bid on KPPP portal ↗</a>
+            <a class="btn" href="${esc(tk)}" target="_blank" rel="noopener">Search on TenderKart ↗</a>
+          </div>
+        </aside>
+        <main class="tp-main">
+          <div id="tpFull">${loadingBlock()}</div>
+          ${calculatorHtml(t)}
+        </main>
       </div>`;
     d.setAttribute('aria-hidden', 'false');
     d.classList.add('open');
-    $('scrim').classList.add('open');
     document.body.style.overflow = 'hidden';
-    d.querySelector('.drawer-body').scrollTop = 0;
+    d.scrollTop = 0;
     d.querySelector('[data-close]').focus();
     bindCalculator(t);
+    loadFull(t);
     if (location.hash !== '#t=' + t.id) history.pushState({ tender: t.id }, '', '#t=' + encodeURIComponent(t.id));
+  }
+
+  function loadingBlock() {
+    return `<section class="panel"><h3>Loading full details from KPPP…</h3><div class="skeleton line"></div><div class="skeleton line"></div><div class="skeleton line short"></div></section>`;
+  }
+
+  async function loadFull(t) {
+    const box = $('tpFull');
+    if (!t.nit) { box.innerHTML = fullUnavailable(t); return; }
+    const key = `${t.cat}/${t.nit}`;
+    try {
+      if (!detailCache.has(key)) {
+        detailCache.set(key, fetch(`/api/tender/${key}`).then((r) => r.json()).then((j) => {
+          if (!j.success) throw new Error(j.message || 'Not available');
+          return j;
+        }));
+      }
+      const full = await detailCache.get(key);
+      if ($('tpFull') !== box) return; // another tender was opened meanwhile
+      renderFull(t, full);
+    } catch {
+      detailCache.delete(key);
+      if ($('tpFull') === box) box.innerHTML = fullUnavailable(t);
+    }
+  }
+
+  function fullUnavailable(t) {
+    return `<section class="panel"><h3>Full details</h3><p class="muted-p">KPPP didn't send the full details right now. Search for <b class="ref">${esc(t.ref)}</b> on the KPPP portal to see documents and conditions, or try again in a minute.</p></section>`;
+  }
+
+  function renderFull(t, f) {
+    // Side column: exact dates, EMD split and contact.
+    const dates = [
+      ['Published', fmtKppp(f.dates.published)],
+      ['Last date for questions', fmtKppp(f.dates.queries)],
+      ['Pre-bid meeting', fmtKppp(f.dates.preBid)],
+      ['Bid submission ends', fmtKppp(f.dates.submission)],
+      ['Bids open', fmtKppp(f.dates.opening)]
+    ].filter(([, v]) => v);
+    if (dates.length) $('tpDates').innerHTML = `<h3>Important dates</h3><dl class="facts">${dates.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+    if (f.money.emdCash && f.money.emdGuarantee && $('emdNote')) {
+      $('emdNote').textContent = `${money(f.money.emdCash)} cash + ${money(f.money.emdGuarantee)} bank guarantee`;
+    }
+    const c = f.contact || {};
+    if (c.person || c.mobile || c.address) {
+      const box = $('tpContact');
+      box.hidden = false;
+      box.innerHTML = `<h3>Contact</h3><dl class="facts">
+        ${c.person ? `<dt>Officer</dt><dd>${esc(c.person)}</dd>` : ''}
+        ${c.mobile ? `<dt>Mobile</dt><dd><a href="tel:${esc(c.mobile)}">${icon.phone} ${esc(c.mobile)}</a></dd>` : ''}
+        ${c.address ? `<dt>Address</dt><dd>${esc(c.address)}</dd>` : ''}
+      </dl>`;
+    }
+
+    // Main column.
+    const terms = [
+      ['Work description', f.description && f.description !== t.title ? esc(f.description) : ''],
+      ['Evaluation', esc(f.terms.evaluation)],
+      ['Bid type', esc(f.terms.bidType)],
+      ['Tax', f.terms.tax ? esc(f.terms.tax[0].toUpperCase() + f.terms.tax.slice(1)) : ''],
+      ['Bid validity', f.terms.validityDays ? `${f.terms.validityDays} days` : ''],
+      ['Call', f.terms.call ? `Call ${f.terms.call}${f.terms.retender ? ' (re-tender)' : ''}` : ''],
+      ['Technical weightage', f.terms.techWeight ? `${f.terms.techWeight}%` : ''],
+      ['Tender value (approved amount)', num(f.money.provisional) ? money(f.money.provisional, { full: true }) : ''],
+      ['File number', esc(f.fileNumber)],
+      ['Department', esc(t.dept)],
+      ['Office', esc(t.office)]
+    ].filter(([, v]) => v);
+
+    const files = f.files.length ? `<section class="panel"><h3>Tender documents <span class="count">${f.files.length}</span></h3>
+      <div class="files">${f.files.map((x) => `<a class="file" href="${esc(x.url)}" target="_blank" rel="noopener">${icon.doc}<span><b>${esc(x.name)}</b><small>${esc(x.type || 'Document')}</small></span><em>Download</em></a>`).join('')}</div>
+    </section>` : '';
+
+    const eligibility = f.eligibility.length ? `<section class="panel"><h3>Who is eligible <span class="count">${f.eligibility.length}</span></h3>
+      <ol class="rules">${f.eligibility.map((x) => `<li>${esc(x)}</li>`).join('')}</ol></section>` : '';
+
+    const technical = f.technical.length ? `<section class="panel"><h3>Technical qualification <span class="count">${f.technical.length}</span></h3>
+      <div class="quals">${f.technical.map((q) => `<div class="qual">
+        <div class="qual-top">${q.category ? `<span class="badge soft">${esc(q.category)}</span>` : ''}${q.weight ? `<span class="badge soft">${q.weight} marks</span>` : ''}</div>
+        <p>${esc(q.text)}</p>
+        ${q.documents.length ? `<small>Proof: ${q.documents.map(esc).join(', ')}</small>` : ''}
+      </div>`).join('')}</div></section>` : '';
+
+    const docs = f.documents.length ? `<section class="panel"><h3>Documents to upload with your bid <span class="count">${f.documents.length}</span></h3>
+      <ul class="checklist">${f.documents.map((x) => `<li>${icon.check}<span>${esc(x.name)}${x.cover ? `<small>${esc(x.cover)}${x.optional ? '' : ' · mandatory'}</small>` : ''}</span></li>`).join('')}</ul></section>` : '';
+
+    const itemCount = f.groups.reduce((n, g) => n + g.items.length, 0);
+    const items = itemCount ? `<section class="panel"><h3>${t.cat === 'WORKS' ? 'Bill of quantities' : 'Items'} <span class="count">${fmtInt(itemCount)}</span></h3>
+      ${f.groups.map((g, gi) => {
+        // Goods tenders often carry ₹1 placeholder prices; only show real rates.
+        const showRate = g.items.some((i) => i.rate > 1);
+        const showAmt = g.items.some((i) => i.amount > 1);
+        return `<div class="boq">
+        ${g.name || g.total ? `<div class="boq-head"><b>${esc(g.name || 'Items')}</b>${g.note ? `<span class="badge soft">${esc(g.note)}</span>` : ''}${g.total ? `<span class="spacer"></span><strong>${money(g.total, { full: true })}</strong>` : ''}</div>` : ''}
+        <div class="table-wrap"><table>
+          <thead><tr><th>#</th><th>Item</th><th class="n">Qty</th><th>Unit</th>${showRate ? '<th class="n">Rate</th>' : ''}${showAmt ? '<th class="n">Amount</th>' : ''}</tr></thead>
+          <tbody>${g.items.map((i, ii) => `<tr${ii >= 12 ? ` class="more-row" data-group="${gi}" hidden` : ''}>
+            <td>${esc(i.code || ii + 1)}</td>
+            <td><div class="item-name">${esc(i.name)}</div>${i.spec && i.spec !== i.name ? `<small>${esc(i.spec)}</small>` : ''}${i.section ? `<small>${esc(i.section)}</small>` : ''}</td>
+            <td class="n">${i.qty ?? ''}</td><td>${esc(i.unit)}</td>
+            ${showRate ? `<td class="n">${i.rate ? money(i.rate, { full: true }) : ''}</td>` : ''}
+            ${showAmt ? `<td class="n">${i.amount ? money(i.amount, { full: true }) : ''}</td>` : ''}
+          </tr>`).join('')}</tbody>
+        </table></div>
+        ${g.items.length > 12 ? `<button class="btn ghost show-rows" type="button" data-group="${gi}">Show all ${fmtInt(g.items.length)} items</button>` : ''}
+      </div>`;
+      }).join('')}
+    </section>` : '';
+
+    $('tpFull').innerHTML = `
+      <section class="panel"><h3>Tender details</h3><dl class="facts">${terms.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></section>
+      ${files}${eligibility}${technical}${docs}${items}`;
+    $('tpFull').querySelectorAll('.show-rows').forEach((b) => b.addEventListener('click', () => {
+      $('tpFull').querySelectorAll(`.more-row[data-group="${b.dataset.group}"]`).forEach((r) => { r.hidden = false; });
+      b.remove();
+    }));
   }
 
   function closeDrawer({ fromHistory = false } = {}) {
@@ -360,7 +496,6 @@
     if (!d.classList.contains('open')) return;
     d.classList.remove('open');
     d.setAttribute('aria-hidden', 'true');
-    $('scrim').classList.remove('open');
     document.body.style.overflow = '';
     if (!fromHistory && location.hash.startsWith('#t=')) history.back();
     lastFocus?.focus?.();
@@ -501,7 +636,6 @@
   $('exportBtn').addEventListener('click', exportCsv);
   $('moreBtn').addEventListener('click', renderMore);
   $('chips').addEventListener('click', (e) => { const b = e.target.closest('[data-clear]'); if (b) clearFilter(b.dataset.clear); });
-  $('scrim').addEventListener('click', () => closeDrawer());
   $('statusBtn').addEventListener('click', showStatus);
   $('statusDialog').addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === e.currentTarget) $('statusDialog').close(); });
   $('themeBtn').addEventListener('click', () => {
