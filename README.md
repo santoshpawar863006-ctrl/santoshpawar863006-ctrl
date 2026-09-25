@@ -1,6 +1,6 @@
-# KPPP-NEEWWW
+# TenderOne
 
-Karnataka Tender Intelligence — Cloudflare Worker (`worker/`) serving the static site in `public/`.
+Karnataka tender desk — a Cloudflare Worker (`worker/`) serving the site in `public/` (`index.html`, `app.js`, `app.css`, plus `login.html` and `admin.html`).
 
 Sign in at `/login.html` with the admin account created from the `ADMIN_USERNAME` / `ADMIN_PASSWORD` secrets below.
 
@@ -21,13 +21,18 @@ Open **System Health** in the app to check the **Secret Bindings** card: it show
 
 `wrangler.jsonc` sets `keep_vars: true` so dashboard variables are not wiped on Git deploys.
 
-Locally, copy `.dev.vars.example` → `.dev.vars` (never commit `.dev.vars`).
+Locally, copy `.dev.## Tender data
 
-## Tender data
+The hourly GitHub Action (`.github/workflows/collect-kppp.yml`) runs:
 
-- The hourly GitHub Action (`.github/workflows/collect-kppp.yml`) collects tenders from KPPP and commits `public/tenders.json` + `public/health.json`; the Worker reads them from this repo and falls back to the deployed copy.
-- KPPP's public tender list does not include EMD or tender fee, and some departments hide the tender value, so those columns can be empty.
-- TenderKart blocks automated lookups with a bot check, so the tender popup links to a TenderKart search instead of loading its data.
+1. `fetch_kppp.py` — collects every published tender from KPPP into `public/tenders.json`.
+2. `fix_financial_fields.py` — keeps the best tender value from the raw KPPP fields.
+3. `enrich_fees.py` — adds EMD and tender fee from KPPP's public per-tender "general info" endpoint, cached in `data/kppp-fees.json` so each run only looks up new tenders.
+4. `build_lite.py` — writes `public/tenders-lite.json`, the small file the website loads, with districts matched from KPPP office names.
+
+The Worker serves the data files from this repo (falling back to the deployed copy) to signed-in users only. TenderKart blocks automated lookups, so tenders link to a TenderKart search instead.
+
+nks to a TenderKart search instead of loading its data.
 
 ## Notes
 
@@ -35,6 +40,6 @@ Locally, copy `.dev.vars.example` → `.dev.vars` (never commit `.dev.vars`).
 - Optional: `ADMIN_RESET=true` once, then remove it.
 - Admins manage users at `/admin.html`.
 
-## Cloudflare auto-deploy (built-in)
+## Deploying
 
-Workers → Settings → Build / Connect to Git → `kppp` repo → branch `main`.
+`.github/workflows/deploy-cloudflare.yml` deploys the Worker on every change to `main` once the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets are set.

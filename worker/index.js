@@ -47,21 +47,18 @@ function json(payload, status = 200, cache = 'no-store') {
   });
 }
 
-function norm(value) {
-  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-}
-
-function asNumber(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const n = Number(String(value).replace(/[₹,]/g, '').trim());
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-async function proxyRaw(filename, ctx, ttl = 60, env = null) {
+async function proxyRaw(filename, ctx, ttl = 60, env = null, visibility = 'public') {
   const cache = caches.default;
   const cacheKey = new Request(`https://kppp-data.local/${filename}`, { method: 'GET' });
+  // The edge copy is shared; logged-in data must not sit in shared browser/proxy caches.
+  const forClient = (resp) => {
+    if (visibility !== 'private') return resp;
+    const headers = new Headers(resp.headers);
+    headers.set('Cache-Control', `private, max-age=${ttl}`);
+    return new Response(resp.body, { status: resp.status, headers });
+  };
   let response = await cache.match(cacheKey);
-  if (response) return response;
+  if (response) return forClient(response);
 
   const headersFor = (source) => new Headers({
     'Content-Type': 'application/json; charset=utf-8',
@@ -103,7 +100,7 @@ async function proxyRaw(filename, ctx, ttl = 60, env = null) {
 
   if (!response) return json({ success: false, message: `${filename} is temporarily unavailable.` }, 502);
   ctx.waitUntil(cache.put(cacheKey, response.clone()));
-  return response;
+  return forClient(response);
 }
 
 function ageHours(value) {
@@ -167,142 +164,6 @@ async function systemHealth(ctx, env = {}) {
   }, 200, 'public, max-age=60, s-maxage=60');
 }
 
-const BID_PROFILES = {
-  WORKS: { direct_pct: 80, overhead_pct: 5, contingency_pct: 3, savings_pct: 0, target_margin_pct: 8 },
-  GOODS: { direct_pct: 90, overhead_pct: 3, contingency_pct: 2, savings_pct: 0, target_margin_pct: 6 },
-  SERVICES: { direct_pct: 75, overhead_pct: 8, contingency_pct: 4, savings_pct: 0, target_margin_pct: 10 },
-  DEFAULT: { direct_pct: 80, overhead_pct: 5, contingency_pct: 3, savings_pct: 0, target_margin_pct: 8 }
-};
-
-function clampPct(value, min, max, fallback) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, n));
-}
-
-function computeBidMath(ecv, assumptions) {
-  const directPct = clampPct(assumptions.direct_pct, 0, 150, 80);
-  const overheadPct = clampPct(assumptions.overhead_pct, 0, 50, 5);
-  const contingencyPct = clampPct(assumptions.contingency_pct, 0, 50, 3);
-  const savingsPct = clampPct(assumptions.savings_pct, 0, 50, 0);
-  const marginPct = clampPct(assumptions.target_margin_pct, 0, 40, 8);
-
-  const directBase = ecv * (directPct / 100);
-  const saving = directBase * (savingsPct / 100);
-  const adjustedDirect = directBase - saving;
-  const overhead = ecv * (overheadPct / 100);
-  const contingency = ecv * (contingencyPct / 100);
-  const siteCost = adjustedDirect + overhead + contingency;
-  const targetBid = marginPct < 100 ? siteCost / (1 - marginPct / 100) : siteCost;
-  const profit = targetBid - siteCost;
-  const targetDiscount = ((ecv - targetBid) / ecv) * 100;
-  const breakEvenDiscount = ((ecv - siteCost) / ecv) * 100;
-  const costShare = (siteCost / ecv) * 100;
-  const workingCapital = Math.max(siteCost * 0.12, asNumber(assumptions.emd_hint) || 0);
-
-  const round = (n) => Math.round(n * 100) / 100;
-  const scenarios = [
-    { label: 'Aggressive', bid: round(siteCost * 1.03), note: 'Thin ~3% buffer above site cost' },
-    { label: 'Balanced (target)', bid: round(targetBid), note: `${marginPct.toFixed(1)}% target margin` },
-    { label: 'Conservative', bid: round(Math.max(targetBid, siteCost * 1.12)), note: 'Higher safety cushion' }
-  ].map((s) => ({
-    ...s,
-    profit: round(s.bid - siteCost),
-    discount_vs_ecv_pct: round(((ecv - s.bid) / ecv) * 100)
-  }));
-
-  const warnings = [];
-  if (costShare >= 100) warnings.push('Modelled site cost is at or above ECV. Re-rate carefully before bidding.');
-  else if (costShare >= 95) warnings.push('Very little cost headroom remains under these assumptions.');
-  if (targetBid > ecv) warnings.push('Target margin implies a bid above ECV.');
-  if (directPct + overheadPct + contingencyPct < 60) warnings.push('Entered cost percentages look unusually low.');
-
-  return {
-    assumptions: {
-      direct_pct: directPct,
-      overhead_pct: overheadPct,
-      contingency_pct: contingencyPct,
-      savings_pct: savingsPct,
-      target_margin_pct: marginPct,
-      rationale: assumptions.rationale || null
-    },
-    results: {
-      estimated_site_cost: round(siteCost),
-      break_even_bid: round(siteCost),
-      cost_to_cost_bid: round(siteCost),
-      target_bid: round(targetBid),
-      expected_profit: round(profit),
-      target_discount_vs_ecv_pct: round(targetDiscount),
-      max_safe_discount_pct: round(breakEvenDiscount),
-      cost_share_of_ecv_pct: round(costShare),
-      working_capital_hint: round(workingCapital)
-    },
-    scenarios,
-    risks: Array.isArray(assumptions.risks) ? assumptions.risks.filter(Boolean).slice(0, 8) : [],
-    warnings
-  };
-}
-
-function defaultAssumptions(category, emd) {
-  const base = BID_PROFILES[String(category || '').toUpperCase()] || BID_PROFILES.DEFAULT;
-  return {
-    ...base,
-    emd_hint: asNumber(emd),
-    rationale: `Default ${String(category || 'WORKS').toUpperCase()} contractor planning profile. Adjust with your rate analysis.`,
-    risks: [
-      'Verify BOQ quantities and current material/labour rates before submission.',
-      'Confirm eligibility, class, EMD mode and site conditions on the official KPPP notice.'
-    ]
-  };
-}
-
-async function bidCalculator(request, env) {
-  let body = {};
-  try { body = await request.json(); } catch { body = {}; }
-
-  const tender = {
-    id: body.id || '',
-    ref_no: body.ref_no || body.tender || '',
-    title: body.title || '',
-    category: body.category || 'WORKS',
-    department: body.department || '',
-    location: body.location || '',
-    amount: asNumber(body.amount ?? body.ecv),
-    emd: asNumber(body.emd),
-    fee: asNumber(body.fee),
-    closing_date: body.closing_date || '',
-    work_category: body.work_category || '',
-    tender_type: body.tender_type || '',
-    inviting_strategy: body.inviting_strategy || ''
-  };
-
-  if (!tender.amount) {
-    return json({
-      success: false,
-      message: 'Tender value (ECV) is required to calculate a bid. Enter amount manually if missing from the feed.'
-    }, 400);
-  }
-
-  const override = body.assumptions && typeof body.assumptions === 'object' ? body.assumptions : null;
-  const assumptions = {
-    ...defaultAssumptions(tender.category, tender.emd),
-    ...(override || {}),
-    emd_hint: asNumber(tender.emd)
-  };
-
-  const math = computeBidMath(tender.amount, assumptions);
-  return json({
-    success: true,
-    tender_ref: tender.ref_no || tender.id || '',
-    ecv: tender.amount,
-    emd: tender.emd,
-    category: String(tender.category || '').toUpperCase(),
-    message: override ? 'Calculated from your edited assumptions.' : 'Calculated from the standard category profile. Edit the percentages and recalculate to match your rates.',
-    ...math,
-    disclaimer: 'Planning estimate only. Verify BOQ quantities, current rates, royalties, GST, machinery and site conditions before submitting a bid.'
-  });
-}
-
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -331,17 +192,12 @@ export default {
       }
     }
 
-    if (url.pathname === '/api/bid_calculator' && request.method === 'POST') {
-      const denied = await requireAuthOrError(request, env);
-      if (denied) return denied;
-      return bidCalculator(request, env);
-    }
     if (request.method !== 'GET') return json({ success: false, message: 'Method not allowed.' }, 405);
 
-    if (url.pathname === '/tenders.json') {
+    if (url.pathname === '/tenders-lite.json' || url.pathname === '/tenders.json') {
       const denied = await requireAuthOrError(request, env);
       if (denied) return denied;
-      return proxyRaw('tenders.json', ctx, 60, env);
+      return proxyRaw(url.pathname.slice(1), ctx, 300, env, 'private');
     }
     if (url.pathname === '/health.json') return proxyRaw('health.json', ctx, 30, env);
     if (url.pathname === '/api/system_health') {
@@ -349,11 +205,8 @@ export default {
       if (denied) return denied;
       return systemHealth(ctx, env);
     }
-    if (url.pathname === '/api/tender_detail') {
-      return json({ success: false, message: 'Authenticated KPPP full-view is not required on Cloudflare. All public KPPP feed details remain available.' });
-    }
     if (url.pathname.startsWith('/api/')) {
-      return json({ success: false, message: 'This optional legacy endpoint is not enabled on the zero-cost Cloudflare runtime.' }, 404);
+      return json({ success: false, message: 'Not found.' }, 404);
     }
     return env.ASSETS.fetch(request);
   }

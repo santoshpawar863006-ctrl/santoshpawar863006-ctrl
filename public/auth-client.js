@@ -70,7 +70,8 @@
         const sameOrigin = absolute.origin === location.origin;
         const needsAuth = sameOrigin && (
           absolute.pathname.startsWith('/api/') ||
-          absolute.pathname === '/tenders.json'
+          absolute.pathname === '/tenders.json' ||
+          absolute.pathname === '/tenders-lite.json'
         );
         const publicAuth = absolute.pathname === '/api/auth/login' || absolute.pathname === '/api/auth/bootstrap';
         if (needsAuth && !publicAuth) {
