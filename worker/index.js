@@ -200,7 +200,7 @@ async function tenderDetail(category, nitId, ctx) {
   }
 }
 
-async function tenderFile(category, nitId, uuid, name) {
+async function tenderFile(category, nitId, uuid, name, forceDownload = false) {
   const section = SECTIONS[category];
   if (!section || !/^\d+$/.test(nitId) || !/^[0-9a-f-]{36}$/i.test(uuid)) return json({ success: false, message: 'Unknown file.' }, 400);
   const upstream = await fetch(`${KPPP_API}/${nitId}/${section.file}/${uuid}/download-file`, { headers: { ...KPPP_HEADERS, Accept: '*/*' } });
@@ -208,10 +208,11 @@ async function tenderFile(category, nitId, uuid, name) {
   const safeName = String(name || 'tender-document').replace(/[^\w.\- ()&]+/g, '_').slice(0, 150);
   // KPPP sends every file as octet-stream; label PDFs so the browser can open them directly.
   const isPdf = /\.pdf$/i.test(safeName);
+  const inline = isPdf && !forceDownload;
   return new Response(upstream.body, {
     headers: {
       'Content-Type': isPdf ? 'application/pdf' : (upstream.headers.get('content-type') || 'application/octet-stream'),
-      'Content-Disposition': `${isPdf ? 'inline' : 'attachment'}; filename="${safeName}"`,
+      'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${safeName}"`,
       'Cache-Control': 'public, max-age=86400'
     }
   });
@@ -287,7 +288,7 @@ export default {
 
     if (request.method !== 'GET') return json({ success: false, message: 'Method not allowed.' }, 405);
 
-    if (url.pathname === '/tenders-lite.json' || url.pathname === '/tenders.json') {
+    if (['/tenders-lite.json', '/tenders.json', '/results-lite.json'].includes(url.pathname)) {
       return proxyRaw(url.pathname.slice(1), ctx, 300, env);
     }
     if (url.pathname === '/health.json') return proxyRaw('health.json', ctx, 30, env);
@@ -295,7 +296,7 @@ export default {
     const detail = url.pathname.match(/^\/api\/tender\/(WORKS|GOODS|SERVICES)\/(\d+)$/);
     if (detail) return tenderDetail(detail[1], detail[2], ctx);
     const file = url.pathname.match(/^\/api\/tender-file\/(WORKS|GOODS|SERVICES)\/(\d+)\/([0-9a-fA-F-]+)$/);
-    if (file) return tenderFile(file[1], file[2], file[3], url.searchParams.get('name'));
+    if (file) return tenderFile(file[1], file[2], file[3], url.searchParams.get('name'), url.searchParams.has('dl'));
     // Old bookmarks to the removed login/admin pages go to the tender list.
     if (['/login', '/login.html', '/admin', '/admin.html'].includes(url.pathname)) {
       return Response.redirect(new URL('/', url).toString(), 301);
