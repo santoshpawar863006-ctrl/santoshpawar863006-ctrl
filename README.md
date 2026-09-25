@@ -15,6 +15,6 @@ The Worker serves the data files from this repo, falling back to the deployed co
 
 ## Deploying
 
-Cloudflare builds and deploys the Worker (`karnataka-tender-intelligence`, configured in `wrangler.jsonc`) from this repo's `main` branch through its Git integration (Worker → Settings → Build). No secrets are needed.
+Cloudflare builds and deploys the Worker (`santoshpawar863006-ctrl`, serving tenderone.online, configured in `wrangler.jsonc`) from this repo's `main` branch through its Git integration (Worker → Settings → Build). No secrets are needed.
 
 To run locally: `npm ci && npx wrangler dev`.

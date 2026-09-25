@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "karnataka-tender-intelligence",
+  "name": "santoshpawar863006-ctrl",
   "main": "./worker/index.js",
   "compatibility_date": "2026-08-12",
   "assets": {
