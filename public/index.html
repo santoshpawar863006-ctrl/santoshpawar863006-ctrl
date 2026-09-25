@@ -10,8 +10,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=20260925d">
-<script src="/app.js?v=20260925d" defer></script>
+<link rel="stylesheet" href="/app.css?v=20260925f">
+<script src="/app.js?v=20260925f" defer></script>
 </head>
 <body>
 <header class="hero">
@@ -32,6 +32,10 @@
       <h1>Every Karnataka government tender, in one place.</h1>
       <p>Live KPPP works, goods and services tenders with EMD, fee and closing dates — refreshed every hour.</p>
     </div>
+    <div class="modes" role="tablist" aria-label="Section">
+      <button type="button" role="tab" data-mode="live" aria-selected="true">Live tenders</button>
+      <button type="button" role="tab" data-mode="results" aria-selected="false">Past results</button>
+    </div>
     <label class="search">
       <span class="sr-only">Search tenders</span>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
@@ -41,7 +45,7 @@
   </div>
 </header>
 
-<main class="wrap">
+<main class="wrap" id="liveView">
   <section class="stats" aria-label="Tender counts">
     <button class="stat all" data-cat="ALL" type="button"><span><i></i>All tenders</span><strong id="cAll">–</strong></button>
     <button class="stat works" data-cat="WORKS" type="button"><span><i></i>Works</span><strong id="cWorks">–</strong></button>
@@ -78,6 +82,10 @@
         <option value="value">Highest value</option>
         <option value="emd">Lowest EMD</option>
       </select></div>
+      <button class="btn" id="forMeBtn" type="button" aria-pressed="false" title="Show only tenders that match your profile">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+        For me
+      </button>
       <button class="btn" id="savedBtn" type="button" aria-pressed="false">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z"/></svg>
         Saved <span id="savedCount">0</span>
@@ -94,11 +102,39 @@
   <div class="results-head">
     <h2 id="resultTitle">Loading tenders…</h2>
     <div class="chips" id="chips"></div>
+    <span class="spacer"></span>
+    <div class="seg" role="group" aria-label="View">
+      <button type="button" data-view="cards" aria-pressed="true" title="Card view"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg> Cards</button>
+      <button type="button" data-view="list" aria-pressed="false" title="List view"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg> List</button>
+    </div>
   </div>
   <section class="grid" id="grid" aria-live="polite">
     <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
   </section>
   <div class="more"><button class="btn" id="moreBtn" type="button" hidden>Show more tenders</button></div>
+</main>
+
+<main class="wrap" id="resultsView" hidden>
+  <section class="insights" id="insights" aria-live="polite">
+    <div class="stat"><span>Awarded tenders</span><strong id="rCount">–</strong></div>
+    <div class="stat"><span>Typical winning bid</span><strong id="rMedian">–</strong><small>vs estimate (median L1)</small></div>
+    <div class="stat"><span>Average bidders</span><strong id="rBidders">–</strong></div>
+    <div class="stat"><span>Top winners</span><ol class="winners" id="rWinners"></ol></div>
+  </section>
+  <section class="filters">
+    <div class="filter-row">
+      <div class="select"><select id="rCat" aria-label="Category"><option value="">All categories</option><option value="WORKS">Works</option><option value="GOODS">Goods</option><option value="SERVICES">Services</option></select></div>
+      <div class="select"><select id="rDistrict" aria-label="District"><option value="">All districts</option></select></div>
+      <div class="select"><select id="rDept" aria-label="Department"><option value="">All departments</option></select></div>
+      <div class="select"><select id="rWork" aria-label="Type of work"><option value="">All types of work</option></select></div>
+      <div class="select"><select id="rSort" aria-label="Sort"><option value="new">Recently awarded</option><option value="discount">Biggest discount</option><option value="value">Highest value</option><option value="bidders">Most bidders</option></select></div>
+      <span class="spacer"></span>
+      <button class="btn ghost" id="rReset" type="button">Reset</button>
+    </div>
+  </section>
+  <div class="results-head"><h2 id="rTitle">Loading results…</h2><p class="note" style="margin:0">Winners and bid amounts published by KPPP. Search a contractor's name to see their bids.</p></div>
+  <section class="rlist" id="rList"></section>
+  <div class="more"><button class="btn" id="rMore" type="button" hidden>Show more results</button></div>
 </main>
 
 <footer class="foot">
@@ -112,6 +148,26 @@
 
 <div class="tender-page" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dTitle" aria-hidden="true"></div>
 
+<dialog id="profileDialog" class="wide">
+  <div class="dialog-head"><h3>Tenders for me</h3><button class="close" type="button" data-close aria-label="Close">✕</button></div>
+  <form class="profile" id="profileForm" method="dialog">
+    <p class="note" style="margin:0 0 12px">Choose what you bid on. "For me" then shows only matching tenders. Leave a section empty to allow everything.</p>
+    <fieldset><legend>Category</legend><div class="opts" id="pCats"></div></fieldset>
+    <fieldset><legend>Districts</legend><div class="opts" id="pDistricts"></div></fieldset>
+    <fieldset><legend>Type of work</legend><div class="opts" id="pWork"></div></fieldset>
+    <fieldset><legend>Tender value</legend>
+      <div class="range-row">
+        <label>From ₹<input type="number" id="pMin" min="0" step="100000" inputmode="numeric" placeholder="0"></label>
+        <label>To ₹<input type="number" id="pMax" min="0" step="100000" inputmode="numeric" placeholder="No limit"></label>
+      </div>
+      <label class="check"><input type="checkbox" id="pNoValue" checked> Include tenders where value is not published</label>
+    </fieldset>
+    <fieldset><legend>Who can bid</legend><div class="opts">
+      <label class="check"><input type="checkbox" id="pReserved"> I can bid on reserved (SC/ST etc.) tenders</label>
+    </div></fieldset>
+    <div class="profile-actions"><button class="btn ghost" type="button" id="pClear">Clear profile</button><span class="spacer"></span><button class="btn primary" type="submit" id="pSave">Save &amp; show my tenders</button></div>
+  </form>
+</dialog>
 <dialog id="statusDialog">
   <div class="dialog-head"><h3>System status</h3><button class="close" type="button" data-close aria-label="Close">✕</button></div>
   <ul class="status-list" id="statusList"><li>Checking…</li></ul>

@@ -5,6 +5,8 @@
   const CACHE_NAME = 'tenderone-data-v1';
   const SAVED_KEY = 'kppp_saved_tenders';
   const THEME_KEY = 'tenderone_theme';
+  const VIEW_KEY = 'tenderone_view';
+  const PROFILE_KEY = 'tenderone_profile';
   const PAGE = 30;
   const DAY = 86400000;
 
@@ -50,7 +52,8 @@
 
   const S = {
     all: [], filtered: [], shown: 0, generatedAt: null,
-    cat: 'ALL', soon: 0, savedOnly: false, q: '',
+    cat: 'ALL', soon: 0, savedOnly: false, forMe: false, q: '',
+    profile: readJSON(PROFILE_KEY, null),
     saved: new Set(readJSON(SAVED_KEY, [])),
     byId: new Map()
   };
@@ -182,6 +185,7 @@
     for (const t of S.all) {
       if (S.cat !== 'ALL' && t.cat !== S.cat) continue;
       if (S.savedOnly && !S.saved.has(t.id)) continue;
+      if (S.forMe && !matchesProfile(t)) continue;
       if (f.district && t.district !== f.district) continue;
       if (f.dept && t.dept !== f.dept) continue;
       if (f.access && t.access !== f.access) continue;
@@ -224,6 +228,7 @@
     if (f.closing) chips.push(['fClosing', `Closing in ${f.closing} days`]);
     if (f.access) chips.push(['fAccess', f.access]);
     if (S.savedOnly) chips.push(['saved', 'Saved only']);
+    if (S.forMe) chips.push(['forMe', 'For me']);
     $('chips').innerHTML = chips.map(([k, label]) => `<button type="button" class="chip" data-clear="${k}">${esc(label)}<b aria-hidden="true">×</b></button>`).join('');
   }
 
@@ -232,8 +237,58 @@
     document.querySelectorAll('.stat[data-cat]').forEach((el) => el.classList.toggle('active', el.dataset.cat === S.cat && !f.closing));
     document.querySelector('.stat.soon').classList.toggle('active', S.soon === 7 && !$('fClosing').value);
     $('savedBtn').classList.toggle('on', S.savedOnly);
+    $('forMeBtn').classList.toggle('on', S.forMe);
+    $('forMeBtn').setAttribute('aria-pressed', String(S.forMe));
     $('savedBtn').setAttribute('aria-pressed', String(S.savedOnly));
     $('savedCount').textContent = S.saved.size;
+  }
+
+  // ---------- Tenders for me ----------
+  function matchesProfile(t) {
+    const p = S.profile;
+    if (!p) return true;
+    if (p.cats?.length && !p.cats.includes(t.cat)) return false;
+    if (p.districts?.length && !p.districts.includes(t.district)) return false;
+    if (p.work?.length && !p.work.includes(t.work)) return false;
+    if (!p.reserved && t.access && t.access !== 'Open') return false;
+    const v = num(t.value);
+    if (v === null) return p.noValue !== false;
+    if (p.min && v < p.min) return false;
+    if (p.max && v > p.max) return false;
+    return true;
+  }
+
+  function openProfile() {
+    const p = S.profile || {};
+    const box = (id, values, chosen) => {
+      $(id).innerHTML = values.map(([v, label, n]) => `<label class="check"><input type="checkbox" value="${esc(v)}" ${chosen?.includes(v) ? 'checked' : ''}> ${esc(label)}${n ? ` <small>${fmtInt(n)}</small>` : ''}</label>`).join('');
+    };
+    const counts = (key) => {
+      const m = new Map();
+      for (const t of S.all) if (t[key]) m.set(t[key], (m.get(t[key]) || 0) + 1);
+      return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([v, n]) => [v, v, n]);
+    };
+    box('pCats', [['WORKS', 'Works'], ['GOODS', 'Goods'], ['SERVICES', 'Services']], p.cats);
+    box('pDistricts', counts('district'), p.districts);
+    box('pWork', counts('work'), p.work);
+    $('pMin').value = p.min || '';
+    $('pMax').value = p.max || '';
+    $('pNoValue').checked = p.noValue !== false;
+    $('pReserved').checked = Boolean(p.reserved);
+    $('profileDialog').showModal();
+  }
+
+  function saveProfile() {
+    const picked = (id) => [...$(id).querySelectorAll('input:checked')].map((i) => i.value);
+    S.profile = {
+      cats: picked('pCats'), districts: picked('pDistricts'), work: picked('pWork'),
+      min: Number($('pMin').value) || 0, max: Number($('pMax').value) || 0,
+      noValue: $('pNoValue').checked, reserved: $('pReserved').checked
+    };
+    writeJSON(PROFILE_KEY, S.profile);
+    S.forMe = true;
+    apply();
+    toast(`${fmtInt(S.filtered.length)} tenders match your profile`);
   }
 
   // ---------- Cards ----------
@@ -362,6 +417,7 @@
         </aside>
         <main class="tp-main">
           <div id="tpFull">${loadingBlock()}</div>
+          <section class="panel" id="tpSimilar" hidden></section>
           ${calculatorHtml(t)}
         </main>
       </div>`;
@@ -372,6 +428,7 @@
     d.querySelector('[data-close]').focus();
     bindCalculator(t);
     loadFull(t);
+    renderSimilar(t);
     if (location.hash !== '#t=' + t.id) history.pushState({ tender: t.id }, '', '#t=' + encodeURIComponent(t.id));
   }
 
@@ -443,7 +500,10 @@
     ].filter(([, v]) => v);
 
     const files = f.files.length ? `<section class="panel"><h3>Tender documents <span class="count">${f.files.length}</span></h3>
-      <div class="files">${f.files.map((x) => `<a class="file" href="${esc(x.url)}" target="_blank" rel="noopener">${icon.doc}<span><b>${esc(x.name)}</b><small>${esc(x.type || 'Document')}</small></span><em>Download</em></a>`).join('')}</div>
+      <div class="files">${f.files.map((x) => `<div class="file">${icon.doc}<span><b>${esc(x.name)}</b><small>${esc(x.type || 'Document')}</small></span>
+        ${/\.pdf$/i.test(x.name) ? `<a class="btn" href="${esc(x.url)}" target="_blank" rel="noopener">View</a>` : ''}
+        <a class="btn primary" href="${esc(x.url)}&dl=1" download="${esc(x.name)}">Download</a></div>`).join('')}</div>
+      <p class="note">Downloads come straight from KPPP. Large files can take a few seconds to start.</p>
     </section>` : '';
 
     const eligibility = f.eligibility.length ? `<section class="panel"><h3>Who is eligible <span class="count">${f.eligibility.length}</span></h3>
@@ -556,6 +616,188 @@
     run();
   }
 
+  // ---------- Past results & winners ----------
+  const R = { mode: 'live', all: null, filtered: [], shown: 0, q: '', loading: null };
+  const median = (arr) => {
+    if (!arr.length) return null;
+    const a = [...arr].sort((x, y) => x - y);
+    const m = Math.floor(a.length / 2);
+    return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+  };
+  const pctText = (p) => (p === null || p === undefined ? '—' : `${Math.abs(p).toFixed(1)}% ${p < 0 ? 'below' : p > 0 ? 'above' : 'at'} estimate`);
+  const winPct = (r) => r.bidders?.[0]?.pct ?? null;
+
+  function loadResults() {
+    if (!R.loading) {
+      R.loading = fetch('/results-lite.json', { cache: 'no-cache' })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+        .then((d) => {
+          R.all = (d.results || []).map((r) => {
+            r._award = r.awarded ? Date.parse(r.awarded) : (r.closed ? Date.parse(r.closed) : 0);
+            r._hay = [r.title, r.ref, r.dept, r.office, r.district, r.work, r.winner, ...(r.bidders || []).map((b) => b.name)].filter(Boolean).join(' ').toLowerCase();
+            return r;
+          });
+          const fill = (id, label, key) => {
+            const counts = new Map();
+            for (const r of R.all) if (r[key]) counts.set(r[key], (counts.get(r[key]) || 0) + 1);
+            $(id).innerHTML = `<option value="">${label}</option>` + [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([v, c]) => `<option value="${esc(v)}">${esc(v)} (${fmtInt(c)})</option>`).join('');
+          };
+          fill('rDistrict', 'All districts', 'district');
+          fill('rDept', 'All departments', 'dept');
+          fill('rWork', 'All types of work', 'work');
+          return R.all;
+        })
+        .catch((err) => { R.loading = null; throw err; });
+    }
+    return R.loading;
+  }
+
+  function setMode(mode) {
+    R.mode = mode;
+    document.querySelectorAll('[data-mode]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.mode === mode)));
+    $('liveView').hidden = mode !== 'live';
+    $('resultsView').hidden = mode !== 'results';
+    $('q').value = mode === 'results' ? R.q : S.q;
+    $('q').placeholder = mode === 'results' ? 'Search results by work, department, town or contractor name…' : 'Search by work, tender number, department or town…';
+    if (mode === 'results') {
+      $('rTitle').textContent = 'Loading results…';
+      loadResults().then(applyResults).catch((err) => {
+        $('rTitle').textContent = 'Results are not available yet';
+        $('rList').innerHTML = `<div class="empty"><strong>Past results are still being collected.</strong>Please check again later. (${esc(err.message)})</div>`;
+      });
+    }
+  }
+
+  function filterResults(f) {
+    const terms = (f.q || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return (R.all || []).filter((r) => (!f.cat || r.cat === f.cat) && (!f.district || r.district === f.district)
+      && (!f.dept || r.dept === f.dept) && (!f.work || r.work === f.work)
+      && (!terms.length || terms.every((w) => r._hay.includes(w))));
+  }
+
+  function summarize(list) {
+    const pcts = list.map(winPct).filter((p) => p !== null);
+    const withBids = list.filter((r) => r.bidders?.length);
+    const wins = new Map();
+    for (const r of list) if (r.winner) wins.set(r.winner, (wins.get(r.winner) || 0) + 1);
+    return {
+      count: list.length,
+      median: median(pcts),
+      bidders: withBids.length ? withBids.reduce((n, r) => n + r.bidders.length, 0) / withBids.length : null,
+      top: [...wins.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+    };
+  }
+
+  function applyResults() {
+    if (!R.all) return;
+    const f = { q: R.q, cat: $('rCat').value, district: $('rDistrict').value, dept: $('rDept').value, work: $('rWork').value };
+    const list = filterResults(f);
+    const sort = $('rSort').value;
+    const by = {
+      new: (a, b) => b._award - a._award,
+      discount: (a, b) => (winPct(a) ?? 999) - (winPct(b) ?? 999),
+      value: (a, b) => (num(b.value) || 0) - (num(a.value) || 0),
+      bidders: (a, b) => (b.bidders?.length || 0) - (a.bidders?.length || 0)
+    }[sort];
+    list.sort(by);
+    R.filtered = list;
+    R.shown = 0;
+    const sum = summarize(list);
+    $('rCount').textContent = fmtInt(sum.count);
+    $('rMedian').textContent = sum.median === null ? '—' : `${Math.abs(sum.median).toFixed(1)}% ${sum.median <= 0 ? 'below' : 'above'}`;
+    $('rBidders').textContent = sum.bidders === null ? '—' : sum.bidders.toFixed(1);
+    $('rWinners').innerHTML = sum.top.length ? sum.top.map(([n, c]) => `<li><button type="button" data-win="${esc(n)}">${esc(n)}</button><b>${c}</b></li>`).join('') : '<li>—</li>';
+    $('rTitle').innerHTML = `${fmtInt(list.length)} <span>awarded tenders</span>`;
+    for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork']) $(id).classList.toggle('set', Boolean($(id).value));
+    $('rList').innerHTML = '';
+    moreResults();
+  }
+
+  function resultRow(r) {
+    const p = winPct(r);
+    const tone = p === null ? '' : p <= -15 ? 'deep' : p < 0 ? 'below' : 'above';
+    const when = r._award ? shortDate.format(new Date(r._award)) : '';
+    return `<details class="rrow">
+      <summary>
+        <div class="rmain">
+          <div class="card-top"><span class="badge ${esc(r.cat)}">${esc(r.cat)}</span>${r.work ? `<span class="badge soft">${esc(r.work)}</span>` : ''}${when ? `<span class="due">Awarded ${esc(when)}</span>` : ''}</div>
+          <h3>${esc(r.title)}</h3>
+          <div class="meta">${pinIcon}<span>${esc([r.district, r.dept].filter(Boolean).join(' · ') || r.office || '')}</span></div>
+        </div>
+        <div class="rside">
+          <span class="rlabel">Winner</span>
+          <strong class="rwinner">${esc(r.winner || 'Not published')}</strong>
+          <div class="rstats">
+            ${p !== null ? `<span class="pct ${tone}">${esc(pctText(p))}</span>` : ''}
+            ${r.bidders?.length ? `<span class="badge soft">${r.bidders.length} bidder${r.bidders.length === 1 ? '' : 's'}</span>` : ''}
+          </div>
+        </div>
+      </summary>
+      <div class="rbody">
+        <p class="ref">${esc(r.ref)}${num(r.value) ? ` · Estimate ${money(r.value, { full: true })}` : ''}${r.office ? ` · ${esc(r.office)}` : ''}</p>
+        ${r.bidders?.length ? `<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Bidder</th><th class="n">Quoted amount</th><th class="n">vs estimate</th></tr></thead><tbody>
+          ${r.bidders.map((b) => `<tr${b.rank === 1 ? ' class="l1"' : ''}><td>${b.rank ? 'L' + b.rank : ''}</td><td><button type="button" class="linkish" data-win="${esc(b.name)}">${esc(b.name)}</button></td><td class="n">${b.amount ? money(b.amount, { full: true }) : ''}</td><td class="n">${b.pct === null || b.pct === undefined ? '' : (b.pct > 0 ? '+' : '') + b.pct.toFixed(2) + '%'}</td></tr>`).join('')}
+        </tbody></table></div>` : '<p class="note">KPPP has not published the bid comparison for this tender.</p>'}
+      </div>
+    </details>`;
+  }
+
+  function moreResults() {
+    if (!R.filtered.length) {
+      $('rList').innerHTML = '<div class="empty"><strong>No results match.</strong>Try a different search or remove a filter.</div>';
+      $('rMore').hidden = true;
+      return;
+    }
+    const next = R.filtered.slice(R.shown, R.shown + PAGE);
+    $('rList').insertAdjacentHTML('beforeend', next.map(resultRow).join(''));
+    R.shown += next.length;
+    const left = R.filtered.length - R.shown;
+    $('rMore').hidden = left <= 0;
+    $('rMore').textContent = `Show more (${fmtInt(left)} left)`;
+  }
+
+  // Past results for work like this tender: same department and type of work, else same type of work in the district.
+  async function similarResults(t) {
+    try { await loadResults(); } catch { return null; }
+    let list = filterResults({ dept: t.dept, work: t.work, cat: t.cat });
+    let scope = `${t.work || 'this type of'} work in ${t.dept}`;
+    if (list.filter((r) => winPct(r) !== null).length < 5 && t.district) {
+      list = filterResults({ district: t.district, work: t.work, cat: t.cat });
+      scope = `${t.work || t.cat.toLowerCase()} work in ${t.district}`;
+    }
+    const sum = summarize(list);
+    return sum.count ? { ...sum, scope } : null;
+  }
+
+  async function renderSimilar(t) {
+    const box = $('tpSimilar');
+    if (!box) return;
+    const sim = await similarResults(t);
+    if ($('tpSimilar') !== box) return;
+    if (!sim || sim.median === null) { box.hidden = true; return; }
+    box.hidden = false;
+    box.innerHTML = `<h3>How similar tenders were won</h3>
+      <p class="muted-p">Based on ${fmtInt(sim.count)} awarded tenders for ${esc(sim.scope)}.</p>
+      <div class="kpis" style="margin-top:12px">
+        <div class="kpi"><span>Typical winning bid</span><strong>${Math.abs(sim.median).toFixed(1)}% ${sim.median <= 0 ? 'below' : 'above'}</strong><small>the estimate (median L1)</small></div>
+        <div class="kpi"><span>Average bidders</span><strong>${sim.bidders === null ? '—' : sim.bidders.toFixed(1)}</strong><small>per tender</small></div>
+        <div class="kpi"><span>Most wins</span><strong style="font-size:14px">${esc(sim.top[0]?.[0] || '—')}</strong><small>${sim.top[0] ? `${sim.top[0][1]} tenders` : ''}</small></div>
+      </div>
+      ${num(t.value) ? `<p class="note">At that rate the winning bid for this tender would be about <b>${money(t.value * (1 + sim.median / 100), { full: true })}</b>.</p>` : ''}
+      <button class="btn" type="button" id="seeSimilar">See these results</button>`;
+    $('seeSimilar').addEventListener('click', () => {
+      closeDrawer();
+      setMode('results');
+      loadResults().then(() => {
+        $('rCat').value = t.cat; $('rWork').value = t.work || '';
+        $('rDept').value = sim.scope.includes(t.dept) ? t.dept : '';
+        $('rDistrict').value = sim.scope.includes(t.dept) ? '' : (t.district || '');
+        applyResults();
+        window.scrollTo({ top: $('resultsView').offsetTop - 10 });
+      });
+    });
+  }
+
   // ---------- Export ----------
   function exportCsv() {
     const rows = [['Tender number', 'Category', 'Title', 'Department', 'Office', 'District', 'Tender value', 'EMD', 'Fee', 'Published', 'Closing', 'Who can bid', 'Work category']];
@@ -604,13 +846,14 @@
     if (key === 'cat') S.cat = 'ALL';
     else if (key === 'q') { S.q = ''; $('q').value = ''; }
     else if (key === 'saved') S.savedOnly = false;
+    else if (key === 'forMe') S.forMe = false;
     else if (key === 'fClosing') { $('fClosing').value = ''; S.soon = 0; }
     else if ($(key)) $(key).value = '';
     apply({ keepScroll: true });
   }
 
   function reset() {
-    S.cat = 'ALL'; S.soon = 0; S.savedOnly = false; S.q = '';
+    S.cat = 'ALL'; S.soon = 0; S.savedOnly = false; S.forMe = false; S.q = '';
     $('q').value = '';
     for (const id of ['fDistrict', 'fDept', 'fValue', 'fClosing', 'fAccess']) $(id).value = '';
     $('fSort').value = 'new';
@@ -621,7 +864,10 @@
   let qTimer;
   $('q').addEventListener('input', (e) => {
     clearTimeout(qTimer);
-    qTimer = setTimeout(() => { S.q = e.target.value; apply({ keepScroll: true }); }, 140);
+    qTimer = setTimeout(() => {
+      if (R.mode === 'results') { R.q = e.target.value; applyResults(); return; }
+      S.q = e.target.value; apply({ keepScroll: true });
+    }, 140);
   });
   for (const id of ['fDistrict', 'fDept', 'fValue', 'fAccess', 'fSort']) $(id).addEventListener('change', () => apply({ keepScroll: true }));
   $('fClosing').addEventListener('change', () => { S.soon = 0; apply({ keepScroll: true }); });
@@ -631,10 +877,52 @@
   document.querySelector('.stat.soon').addEventListener('click', () => {
     S.soon = S.soon === 7 ? 0 : 7; $('fClosing').value = ''; if (S.soon) $('fSort').value = 'closing'; apply();
   });
+  $('forMeBtn').addEventListener('click', () => {
+    if (!S.profile) { openProfile(); return; }
+    S.forMe = !S.forMe;
+    apply({ keepScroll: true });
+    if (S.forMe) toast(`${fmtInt(S.filtered.length)} tenders for you · long-press or right-click “For me” to edit`);
+  });
+  $('forMeBtn').addEventListener('contextmenu', (e) => { e.preventDefault(); openProfile(); });
+  let pressTimer;
+  $('forMeBtn').addEventListener('touchstart', () => { pressTimer = setTimeout(openProfile, 600); }, { passive: true });
+  $('forMeBtn').addEventListener('touchend', () => clearTimeout(pressTimer));
+  $('profileForm').addEventListener('submit', saveProfile);
+  $('pClear').addEventListener('click', () => {
+    S.profile = null; S.forMe = false;
+    try { localStorage.removeItem(PROFILE_KEY); } catch {}
+    $('profileDialog').close(); apply();
+  });
+  $('profileDialog').addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === e.currentTarget) $('profileDialog').close(); });
   $('savedBtn').addEventListener('click', () => { S.savedOnly = !S.savedOnly; apply({ keepScroll: true }); });
   $('resetBtn').addEventListener('click', reset);
   $('exportBtn').addEventListener('click', exportCsv);
   $('moreBtn').addEventListener('click', renderMore);
+  function setView(view) {
+    const list = view === 'list';
+    $('grid').classList.toggle('list', list);
+    document.querySelectorAll('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === (list ? 'list' : 'cards'))));
+    writeJSON(VIEW_KEY, list ? 'list' : 'cards');
+  }
+  setView(readJSON(VIEW_KEY, 'cards'));
+  document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+  document.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+  for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork', 'rSort']) $(id).addEventListener('change', applyResults);
+  $('rMore').addEventListener('click', moreResults);
+  $('rReset').addEventListener('click', () => {
+    for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork']) $(id).value = '';
+    $('rSort').value = 'new'; R.q = ''; $('q').value = ''; applyResults();
+  });
+  $('resultsView').addEventListener('click', (e) => {
+    const w = e.target.closest('[data-win]');
+    if (!w) return;
+    e.preventDefault();
+    R.q = w.dataset.win; $('q').value = R.q; applyResults();
+    window.scrollTo({ top: $('resultsView').offsetTop - 10 });
+  });
+  new IntersectionObserver((entries) => {
+    if (entries.some((en) => en.isIntersecting) && !$('rMore').hidden && R.mode === 'results') moreResults();
+  }, { rootMargin: '600px' }).observe($('rMore'));
   $('chips').addEventListener('click', (e) => { const b = e.target.closest('[data-clear]'); if (b) clearFilter(b.dataset.clear); });
   $('statusBtn').addEventListener('click', showStatus);
   $('statusDialog').addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === e.currentTarget) $('statusDialog').close(); });
