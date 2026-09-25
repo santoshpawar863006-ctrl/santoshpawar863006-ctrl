@@ -10,6 +10,7 @@ data/results-cache.json; each run only looks up newly awarded tenders.
 """
 
 import io
+import time
 import json
 import os
 import re
@@ -34,7 +35,9 @@ FULL_VIEW = {"WORKS": "works-tender-full-view", "GOODS": "goods-tender-full-view
 LIST_LIMIT = {"WORKS": int(os.getenv("RESULTS_WORKS_LIMIT", "6000")),
               "GOODS": int(os.getenv("RESULTS_GOODS_LIMIT", "1500")),
               "SERVICES": int(os.getenv("RESULTS_SERVICES_LIMIT", "1500"))}
-MAX_LOOKUPS = int(os.getenv("RESULTS_MAX_LOOKUPS", "2500"))
+MAX_LOOKUPS = int(os.getenv("RESULTS_MAX_LOOKUPS", "1200"))
+# Stop starting new lookups after this many seconds so the run always saves what it has.
+TIME_BUDGET = int(os.getenv("RESULTS_TIME_BUDGET", "1200"))
 WORKERS = int(os.getenv("RESULTS_WORKERS", "6"))
 PAGE_SIZE = 100
 
@@ -158,24 +161,40 @@ def main():
         except Exception as exc:
             print(f"Could not list awarded {category}: {exc}")
             continue
-        print(f"{category}: {len(listed)} awarded tenders listed")
+        print(f"{category}: {len(listed)} awarded tenders listed", flush=True)
         todo.extend((category, raw) for raw in listed if raw.get("nitId") and str(raw["nitId"]) not in cache)
     todo = todo[:MAX_LOOKUPS]
 
+    started = time.monotonic()
     ok = failed = 0
+
+    def save():
+        CACHE.parent.mkdir(parents=True, exist_ok=True)
+        CACHE.write_text(json.dumps(cache, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+
+    def guarded(cat, raw):
+        # Lookups queued after the time budget are skipped, not started.
+        if time.monotonic() - started > TIME_BUDGET:
+            return None
+        return lookup(session, cat, raw)
+
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        futures = {pool.submit(lookup, session, cat, raw): raw for cat, raw in todo}
+        futures = {pool.submit(guarded, cat, raw): raw for cat, raw in todo}
         for future in as_completed(futures):
             try:
                 record = future.result()
             except Exception:
                 failed += 1
                 continue
+            if record is None:
+                continue
             cache[record["nit"]] = record
             ok += 1
+            if ok % 200 == 0:
+                save()
+                print(f"  {ok} results saved ({int(time.monotonic() - started)}s)", flush=True)
 
-    CACHE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE.write_text(json.dumps(cache, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    save()
     results = sorted(cache.values(), key=lambda r: r.get("awarded") or r.get("closed") or "", reverse=True)
     TARGET.write_text(json.dumps({
         "generated_at": datetime.now(timezone.utc).isoformat(),

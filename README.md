@@ -11,7 +11,7 @@ The hourly GitHub Action (`.github/workflows/collect-kppp.yml`) runs:
 3. `enrich_fees.py` — adds EMD and tender fee from KPPP's public per-tender "general info" endpoint, cached in `data/kppp-fees.json` so each run only looks up new tenders.
 4. `build_lite.py` — writes `public/tenders-lite.json`, the small file the website loads, with districts matched from KPPP office names.
 
-A daily action (`.github/workflows/collect-results.yml`) runs `collect_results.py`, which stores awarded tenders — winner, every bidder's quoted total and rank from KPPP's public comparative statement — in `public/results-lite.json` (cached in `data/results-cache.json`). The bid % is computed against the tender's estimated value, because the % in KPPP's statement double-counts the estimate.
+An action every 4 hours (`.github/workflows/collect-results.yml`) runs `collect_results.py`, which stores awarded tenders — winner, every bidder's quoted total and rank from KPPP's public comparative statement — in `public/results-lite.json` (cached in `data/results-cache.json`). The bid % is computed against the tender's estimated value, because the % in KPPP's statement double-counts the estimate.
 
 The Worker serves the data files from this repo, falling back to the deployed copy. TenderKart blocks automated lookups, so tenders link to a TenderKart search instead.
 
