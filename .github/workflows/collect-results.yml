@@ -3,7 +3,7 @@ name: Collect KPPP Results
 on:
   workflow_dispatch:
   schedule:
-    # Every 4 hours: each run adds up to 1,200 newly awarded tenders.
+    # Every 4 hours: each run looks up as many awarded works tenders as it can in 20 minutes.
     - cron: "37 */4 * * *"
   push:
     branches:

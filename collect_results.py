@@ -1,12 +1,14 @@
-"""Collect results of awarded KPPP tenders into public/results-lite.json.
+"""Collect results of awarded KPPP works tenders into public/results-lite.json.
 
-For each awarded tender KPPP publishes, without a login:
+For each awarded works tender KPPP publishes, without a login:
   * the winner (tenderAwardDatesDTO in the tender full view), and
-  * for WORKS, a "Comparative Statement" spreadsheet with every bidder's
-    total quoted amount, rank (L1, L2 ...) and % against the estimate.
+  * a "Comparative Statement" spreadsheet with every bidder's total quoted
+    amount, rank (L1, L2 ...), % against the estimate and item-wise rates.
+
+Goods and services tenders are not collected.
 
 Results never change once awarded, so each tender is fetched once and kept in
-data/results-cache.json; each run only looks up newly awarded tenders.
+data/results-cache.json; each run only looks up tenders it does not have yet.
 """
 
 import io
@@ -30,20 +32,23 @@ ITEMS_CACHE = Path("data/item-rates-cache.json")
 TARGET = Path("public/results-lite.json")
 RATES = Path("public/rates-lite.json")
 API = "https://kppp.karnataka.gov.in/supplier-registration-service/v1/api/portal-service"
-SEARCH = {"WORKS": "works/search-eproc-tenders", "GOODS": "search-eproc-tenders", "SERVICES": "services/search-eproc-tenders"}
-FULL_VIEW = {"WORKS": "works-tender-full-view", "GOODS": "goods-tender-full-view", "SERVICES": "service-tender-full-view"}
+SEARCH = "works/search-eproc-tenders"
+FULL_VIEW = "works-tender-full-view"
 
 # Pages of 100 awarded tenders (newest first) to list per run. KPPP takes ~40s per page, so this
 # is kept small; each run first catches up on newly awarded tenders, then spends what is left on
 # older pages, continuing from where the last run stopped (data/results-state.json).
-LIST_PAGES = {"WORKS": int(os.getenv("RESULTS_WORKS_PAGES", "6")),
-              "GOODS": int(os.getenv("RESULTS_GOODS_PAGES", "1")),
-              "SERVICES": int(os.getenv("RESULTS_SERVICES_PAGES", "1"))}
-MAX_LOOKUPS = int(os.getenv("RESULTS_MAX_LOOKUPS", "1200"))
+LIST_PAGES = int(os.getenv("RESULTS_WORKS_PAGES", "6"))
+# Older pages are only listed while fewer than this many tenders wait to be looked up. A run gets
+# through a few hundred; the rest are saved in data/results-state.json and go first next run.
+QUEUE = int(os.getenv("RESULTS_QUEUE", "600"))
 # Stop listing / starting lookups after this many seconds (from the start of the run) so the
 # run always finishes and saves what it has.
 TIME_BUDGET = int(os.getenv("RESULTS_TIME_BUDGET", "1200"))
 STATE = Path("data/results-state.json")
+# The listing fields lookup() uses: tenders left for the next run are saved with only these.
+KEEP = ("nitId", "tenderNumber", "title", "description", "deptName", "locationName", "workCategoryName",
+        "ecv", "ecvtenderYn", "publishedDate", "tenderClosureDate", "_tries")
 WORKERS = int(os.getenv("RESULTS_WORKERS", "6"))
 PAGE_SIZE = 100
 
@@ -64,36 +69,51 @@ def make_session():
     return session
 
 
-def list_page(session, category, page):
+def list_page(session, page):
     response = session.post(
-        f"{API}/{SEARCH[category]}?page={page}&size={PAGE_SIZE}&order-by-tender-publish=true",
-        json={"category": category, "status": "AWARDED", "title": ""}, headers=HEADERS, timeout=90)
+        f"{API}/{SEARCH}?page={page}&size={PAGE_SIZE}&order-by-tender-publish=true",
+        json={"category": "WORKS", "status": "AWARDED", "title": ""}, headers=HEADERS, timeout=90)
     response.raise_for_status()
     return response.json() or []
 
 
-def list_awarded(session, category, cache, state, out_of_time):
-    """Newly awarded tenders first (until a page is already fully known), then older pages."""
-    rows, budget = [], LIST_PAGES[category]
-    page = 0
-    while budget > 0 and not out_of_time():
-        batch = list_page(session, category, page)
+def list_awarded(session, known, waiting, cursor, out_of_time):
+    """Tenders not in `known` (which they are added to): newly awarded ones first, until a page is
+    already fully known, then older pages from `cursor` while few tenders are waiting.
+
+    Returns the new tenders and the page the next run continues from.
+    """
+    rows, budget = [], LIST_PAGES
+
+    def fetch(page):
+        # How many tenders on the page were new; None past the end of the list.
+        nonlocal budget
         budget -= 1
-        rows.extend(batch)
-        if not batch or all(str(r.get("nitId")) in cache for r in batch):
-            break
-        page += 1
-    # Spend what is left of this run's pages further back in history.
-    cursor = max(state.get(category, 1), page + 1)
-    while budget > 0 and not out_of_time():
-        batch = list_page(session, category, cursor)
-        budget -= 1
-        if not batch:
-            break
-        rows.extend(batch)
-        cursor += 1
-    state[category] = cursor
-    return rows
+        batch = list_page(session, page)
+        before = len(rows)
+        for raw in batch:
+            nit = str(raw.get("nitId") or "")
+            if nit and nit not in known:
+                known.add(nit)
+                rows.append(raw)
+        return len(rows) - before if batch else None
+
+    try:
+        page = 0
+        while budget > 0 and not out_of_time():
+            new = fetch(page)
+            page += 1
+            if not new:
+                break
+        # Spend what is left of this run's pages further back in history.
+        cursor = max(cursor, page)
+        while budget > 0 and waiting + len(rows) < QUEUE and not out_of_time():
+            if fetch(cursor) is None:
+                break
+            cursor += 1
+    except Exception as exc:
+        print(f"Listing stopped early: {exc}", flush=True)
+    return rows, cursor
 
 
 def clean(value):
@@ -173,9 +193,9 @@ def parse_statement(content):
     return bidders, items
 
 
-def fetch_statement(session, category, nit):
+def fetch_statement(session, nit):
     sheet = session.get(
-        f"{API}/tender-eval/{nit}/commercial-evaluation/tender-category/{category}/commercial-comparison/download-detailed",
+        f"{API}/tender-eval/{nit}/commercial-evaluation/tender-category/WORKS/commercial-comparison/download-detailed",
         headers={**HEADERS, "Accept": "*/*"}, timeout=60)
     if sheet.status_code != 200 or sheet.content[:2] != b"PK":
         return [], []
@@ -185,14 +205,14 @@ def fetch_statement(session, category, nit):
         return [], []
 
 
-def lookup(session, category, raw):
+def lookup(session, raw):
     nit = raw.get("nitId")
-    full = session.get(f"{API}/{nit}/{FULL_VIEW[category]}", headers=HEADERS, timeout=40)
+    full = session.get(f"{API}/{nit}/{FULL_VIEW}", headers=HEADERS, timeout=40)
     full.raise_for_status()
     detail = full.json() or {}
     award = detail.get("tenderAwardDatesDTO") or {}
     winners = [clean(w.get("name")) for w in award.get("listOfBidderDonePBGDTO") or [] if w.get("name")]
-    bidders, items = fetch_statement(session, category, nit) if category == "WORKS" else ([], [])
+    bidders, items = fetch_statement(session, nit)
     # KPPP's own "% against Estimated Rate" is taken against a double-counted
     # estimate, so work it out from the tender's estimated contract value.
     estimate = positive(raw.get("ecv"))
@@ -205,7 +225,7 @@ def lookup(session, category, raw):
         "nit": str(nit),
         "ref": clean(raw.get("tenderNumber")),
         "title": title,
-        "cat": category,
+        "cat": "WORKS",
         "dept": clean(raw.get("deptName")),
         "office": office,
         "district": district_of(office, title, raw.get("description")),
@@ -264,54 +284,58 @@ def build_rates(results, items_cache):
 def main():
     session = make_session()
     cache = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
+    # Only works tenders are collected; drop goods/services results saved by earlier runs.
+    cache = {nit: r for nit, r in cache.items() if r.get("cat") == "WORKS"}
     items_cache = json.loads(ITEMS_CACHE.read_text(encoding="utf-8")) if ITEMS_CACHE.exists() else {}
     state = json.loads(STATE.read_text(encoding="utf-8")) if STATE.exists() else {}
     started = time.monotonic()
     out_of_time = lambda: time.monotonic() - started > TIME_BUDGET
-    todo, seen = [], set()
-    for category in SEARCH:
-        try:
-            listed = list_awarded(session, category, cache, state, out_of_time)
-        except Exception as exc:
-            print(f"Could not list awarded {category}: {exc}", flush=True)
-            continue
-        print(f"{category}: {len(listed)} awarded tenders listed ({int(time.monotonic() - started)}s)", flush=True)
-        for raw in listed:
-            nit = str(raw.get("nitId") or "")
-            if nit and nit not in cache and nit not in seen:
-                seen.add(nit)
-                todo.append((category, raw))
+    # Tenders earlier runs listed but did not get to go first.
+    todo = [raw for raw in state.get("pending", []) if str(raw.get("nitId")) not in cache]
+    waiting = len(todo)
+    known = set(cache) | {str(raw.get("nitId")) for raw in todo}
+    listed, cursor = list_awarded(session, known, waiting, state.get("cursor", 1), out_of_time)
+    todo += listed
     # Works results collected before item rates were stored only need their statement re-read.
-    backfill = [nit for nit, r in cache.items() if r.get("cat") == "WORKS" and r.get("bidders") and nit not in items_cache]
-    todo = todo[:MAX_LOOKUPS]
-    backfill = backfill[:max(0, MAX_LOOKUPS - len(todo))]
-    print(f"{len(todo)} new results to look up, {len(backfill)} item-rate backfills", flush=True)
+    backfill = [nit for nit, r in cache.items() if r.get("bidders") and nit not in items_cache]
+    print(f"{len(listed)} awarded tenders newly listed ({int(time.monotonic() - started)}s), {waiting} waiting "
+          f"from earlier runs, {len(backfill)} item-rate backfills", flush=True)
 
     ok = failed = 0
+
+    def pending():
+        # Not looked up yet (out of time, or failed fewer than 3 times): the next run does these first.
+        return [{k: raw[k] for k in KEEP if raw.get(k) is not None}
+                for raw in todo if str(raw.get("nitId")) not in cache and raw.get("_tries", 0) < 3]
 
     def save():
         CACHE.parent.mkdir(parents=True, exist_ok=True)
         CACHE.write_text(json.dumps(cache, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-        STATE.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+        STATE.write_text(json.dumps({"cursor": cursor, "pending": pending()}, ensure_ascii=False,
+                                    separators=(",", ":")), encoding="utf-8")
         ITEMS_CACHE.write_text(json.dumps(items_cache, ensure_ascii=False, sort_keys=True, separators=(",", ":")), encoding="utf-8")
 
     def guarded(job):
         # Jobs queued after the time budget are skipped, not started.
         if out_of_time():
             return None
-        kind, cat, payload = job
+        kind, payload = job
         if kind == "new":
-            return kind, lookup(session, cat, payload)
-        return kind, (payload, fetch_statement(session, cat, payload)[1])
+            return kind, lookup(session, payload)
+        return kind, (payload, fetch_statement(session, payload)[1])
 
-    jobs = [("new", cat, raw) for cat, raw in todo] + [("items", "WORKS", nit) for nit in backfill]
+    jobs = [("new", raw) for raw in todo] + [("items", nit) for nit in backfill]
+    failures = []
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        futures = [pool.submit(guarded, job) for job in jobs]
+        futures = {pool.submit(guarded, job): job for job in jobs}
         for future in as_completed(futures):
             try:
                 done = future.result()
             except Exception:
                 failed += 1
+                kind, payload = futures[future]
+                if kind == "new":
+                    failures.append(payload)
                 continue
             if done is None:
                 continue
@@ -329,6 +353,10 @@ def main():
                 save()
                 print(f"  {ok} done ({int(time.monotonic() - started)}s)", flush=True)
 
+    # A tender that keeps failing is given up after 3 runs, but a run where KPPP was down does not count.
+    if ok:
+        for raw in failures:
+            raw["_tries"] = raw.get("_tries", 0) + 1
     save()
     results = sorted(cache.values(), key=lambda r: r.get("awarded") or r.get("closed") or "", reverse=True)
     TARGET.write_text(json.dumps({
@@ -343,9 +371,9 @@ def main():
         "items": rates,
     }, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     with_bids = sum(1 for r in results if r.get("bidders"))
-    print(f"Done {ok} jobs, {failed} failed. {len(results)} results, {with_bids} with bidder amounts "
-          f"({TARGET.stat().st_size / 1e6:.2f} MB); {len(rates)} BOQ items with past rates "
-          f"from {len(items_cache)} tenders ({RATES.stat().st_size / 1e6:.2f} MB).")
+    print(f"Done {ok} jobs, {failed} failed, {len(pending())} left for the next run. {len(results)} results, "
+          f"{with_bids} with bidder amounts ({TARGET.stat().st_size / 1e6:.2f} MB); {len(rates)} BOQ items "
+          f"with past rates from {len(items_cache)} tenders ({RATES.stat().st_size / 1e6:.2f} MB).")
 
 
 if __name__ == "__main__":

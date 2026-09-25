@@ -724,7 +724,7 @@
 
   function applyResults() {
     if (!R.all) return;
-    const f = { q: R.q, cat: $('rCat').value, district: $('rDistrict').value, dept: $('rDept').value, work: $('rWork').value };
+    const f = { q: R.q, district: $('rDistrict').value, dept: $('rDept').value, work: $('rWork').value };
     const list = filterResults(f);
     const sort = $('rSort').value;
     const by = {
@@ -742,7 +742,7 @@
     $('rBidders').textContent = sum.bidders === null ? '—' : sum.bidders.toFixed(1);
     $('rWinners').innerHTML = sum.top.length ? sum.top.map(([n, c]) => `<li><button type="button" data-win="${esc(n)}">${esc(n)}</button><b>${c}</b></li>`).join('') : '<li>—</li>';
     $('rTitle').innerHTML = `${fmtInt(list.length)} <span>awarded tenders</span>`;
-    for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork']) $(id).classList.toggle('set', Boolean($(id).value));
+    for (const id of ['rDistrict', 'rDept', 'rWork']) $(id).classList.toggle('set', Boolean($(id).value));
     $('rList').innerHTML = '';
     moreResults();
   }
@@ -823,7 +823,7 @@
       closeDrawer();
       setMode('results');
       loadResults().then(() => {
-        $('rCat').value = t.cat; $('rWork').value = t.work || '';
+        $('rWork').value = t.work || '';
         $('rDept').value = sim.scope.includes(t.dept) ? t.dept : '';
         $('rDistrict').value = sim.scope.includes(t.dept) ? '' : (t.district || '');
         applyResults();
@@ -1102,10 +1102,10 @@
   setView(readJSON(VIEW_KEY, 'cards'));
   document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
   document.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
-  for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork', 'rSort']) $(id).addEventListener('change', applyResults);
+  for (const id of ['rDistrict', 'rDept', 'rWork', 'rSort']) $(id).addEventListener('change', applyResults);
   $('rMore').addEventListener('click', moreResults);
   $('rReset').addEventListener('click', () => {
-    for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork']) $(id).value = '';
+    for (const id of ['rDistrict', 'rDept', 'rWork']) $(id).value = '';
     $('rSort').value = 'new'; R.q = ''; $('q').value = ''; applyResults();
   });
   $('resultsView').addEventListener('click', (e) => {
