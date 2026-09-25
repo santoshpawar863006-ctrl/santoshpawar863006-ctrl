@@ -101,10 +101,15 @@ async function ensureAdminSeeded(env) {
   const run = (async () => {
     const store = await getUsers(env);
     const adminUser = normalizeUsername(env.ADMIN_USERNAME || 'admin');
-    const adminPass = String(env.ADMIN_PASSWORD || 'Admin@KPPP2026!').trim();
+    // No hardcoded fallback: the bootstrap admin password must come from the ADMIN_PASSWORD secret.
+    const adminPass = String(env.ADMIN_PASSWORD || '').trim();
     const adminName = String(env.ADMIN_NAME || 'System Administrator').trim();
     let changed = false;
     let admin = store.users.find((u) => normalizeUsername(u.username) === adminUser);
+
+    if ((!admin || forceReset) && !adminPass) {
+      return { ok: false, message: 'ADMIN_PASSWORD secret not configured' };
+    }
 
     if (!admin) {
       // PBKDF2 is expensive — only when creating the bootstrap admin.
