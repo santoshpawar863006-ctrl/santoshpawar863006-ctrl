@@ -557,7 +557,7 @@
     d.classList.remove('open');
     d.setAttribute('aria-hidden', 'true');
     document.body.style.overflow = '';
-    if (!fromHistory && location.hash.startsWith('#t=')) history.back();
+    if (!fromHistory && /^#[tc]=/.test(location.hash)) history.back();
     lastFocus?.focus?.();
   }
 
@@ -781,7 +781,7 @@
       <div class="kpis" style="margin-top:12px">
         <div class="kpi"><span>Typical winning bid</span><strong>${Math.abs(sim.median).toFixed(1)}% ${sim.median <= 0 ? 'below' : 'above'}</strong><small>the estimate (median L1)</small></div>
         <div class="kpi"><span>Average bidders</span><strong>${sim.bidders === null ? '—' : sim.bidders.toFixed(1)}</strong><small>per tender</small></div>
-        <div class="kpi"><span>Most wins</span><strong style="font-size:14px">${esc(sim.top[0]?.[0] || '—')}</strong><small>${sim.top[0] ? `${sim.top[0][1]} tenders` : ''}</small></div>
+        <div class="kpi"><span>Most wins</span><strong style="font-size:14px">${sim.top[0] ? `<button type="button" class="linkish" data-contractor="${esc(sim.top[0][0])}">${esc(sim.top[0][0])}</button>` : '—'}</strong><small>${sim.top[0] ? `${sim.top[0][1]} tenders` : ''}</small></div>
       </div>
       ${num(t.value) ? `<p class="note">At that rate the winning bid for this tender would be about <b>${money(t.value * (1 + sim.median / 100), { full: true })}</b>.</p>` : ''}
       <button class="btn" type="button" id="seeSimilar">See these results</button>`;
@@ -796,6 +796,112 @@
         window.scrollTo({ top: $('resultsView').offsetTop - 10 });
       });
     });
+  }
+
+  // ---------- Contractor profile ----------
+  // KPPP writes the same bidder slightly differently across tenders ("NAME (1)( FIRM )", extra spaces).
+  const nameKey = (n) => String(n || '').toUpperCase().replace(/\(\s*\d+\s*\)/g, ' ').replace(/[^A-Z0-9()]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+  function countBy(list, key) {
+    const m = new Map();
+    for (const r of list) if (r[key]) m.set(r[key], (m.get(r[key]) || 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }
+
+  function bars(title, entries, total) {
+    if (!entries.length) return '';
+    return `<section class="panel"><h3>${title}</h3><div class="bars">${entries.slice(0, 8).map(([k, n]) => `
+      <div class="bar"><span>${esc(k)}</span><i style="--w:${Math.max(4, Math.round(n / total * 100))}%"></i><b>${fmtInt(n)}</b></div>`).join('')}</div></section>`;
+  }
+
+  async function openContractor(name) {
+    try { await loadResults(); } catch { toast('Past results are not available yet'); return; }
+    const key = nameKey(name);
+    const rows = [];
+    for (const r of R.all) {
+      const mine = (r.bidders || []).find((b) => nameKey(b.name) === key);
+      const won = nameKey(r.winner) === key || mine?.rank === 1;
+      if (mine || won) rows.push({ r, mine, won });
+    }
+    if (!rows.length) { toast('No results found for this contractor'); return; }
+    rows.sort((a, b) => b.r._award - a.r._award);
+    const display = rows.find((x) => x.mine)?.mine.name || rows[0].r.winner || name;
+    const wins = rows.filter((x) => x.won);
+    const withBids = rows.filter((x) => x.mine);
+    const winPcts = wins.map((x) => x.mine?.pct).filter((p) => p !== null && p !== undefined);
+    const allPcts = withBids.map((x) => x.mine.pct).filter((p) => p !== null && p !== undefined);
+    const wonValue = wins.reduce((n, x) => n + (num(x.mine?.amount) || num(x.r.value) || 0), 0);
+    const ranks = { 1: 0, 2: 0, 3: 0 };
+    for (const x of withBids) if (x.mine.rank) ranks[Math.min(3, x.mine.rank)]++;
+    const winRate = withBids.length ? wins.filter((x) => x.mine).length / withBids.length * 100 : null;
+    const medWin = median(winPcts);
+    const medAll = median(allPcts);
+
+    // Competitors: who they meet most, and who finished ahead.
+    const rivals = new Map();
+    for (const x of withBids) {
+      for (const b of x.r.bidders) {
+        const k = nameKey(b.name);
+        if (k === key) continue;
+        const v = rivals.get(k) || { name: b.name, met: 0, ahead: 0 };
+        v.met++;
+        if (b.rank && x.mine.rank && x.mine.rank < b.rank) v.ahead++;
+        rivals.set(k, v);
+      }
+    }
+    const topRivals = [...rivals.values()].sort((a, b) => b.met - a.met).slice(0, 8);
+    const tenders = rows.map((x) => x.r);
+
+    lastFocus = document.activeElement;
+    const d = $('drawer');
+    d.innerHTML = `
+      <div class="tp-bar"><div class="wrap tp-bar-in">
+        <button class="btn ghost" type="button" data-close>${icon.back} Back</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-copy="${esc(display)}">Copy name</button>
+      </div></div>
+      <header class="tp-hero"><div class="wrap">
+        <div class="row"><span class="badge soft">Contractor profile</span></div>
+        <h2 id="dTitle">${esc(display)}</h2>
+        <p class="tp-sub">Based on ${fmtInt(rows.length)} awarded KPPP tenders in our records · ${fmtInt(wins.length)} won</p>
+      </div></header>
+      <div class="wrap cp">
+        <div class="cp-kpis">
+          <div class="kpi"><span>Tenders won</span><strong>${fmtInt(wins.length)}</strong><small>${wonValue ? `worth ${money(wonValue)}` : ''}</small></div>
+          <div class="kpi"><span>Win rate</span><strong>${winRate === null ? '—' : winRate.toFixed(0) + '%'}</strong><small>${withBids.length ? `of ${fmtInt(withBids.length)} works tenders bid` : 'bid amounts not published'}</small></div>
+          <div class="kpi"><span>Usual winning bid</span><strong>${medWin === null ? '—' : pctText(medWin).replace(' estimate', '')}</strong><small>median when they won</small></div>
+          <div class="kpi"><span>Usual bid</span><strong>${medAll === null ? '—' : pctText(medAll).replace(' estimate', '')}</strong><small>median of all their bids</small></div>
+        </div>
+        ${withBids.length ? `<section class="panel"><h3>Where they finish</h3><div class="ranks">
+          <div><b>${ranks[1]}</b><span>L1 (lowest)</span></div><div><b>${ranks[2]}</b><span>L2</span></div><div><b>${ranks[3]}</b><span>L3 or lower</span></div>
+        </div></section>` : ''}
+        <div class="cp-grid">
+          ${bars('Districts', countBy(tenders, 'district'), tenders.length)}
+          ${bars('Departments', countBy(tenders, 'dept'), tenders.length)}
+          ${bars('Type of work', countBy(tenders, 'work'), tenders.length)}
+          ${topRivals.length ? `<section class="panel"><h3>Frequent competitors</h3><div class="table-wrap"><table>
+            <thead><tr><th>Competitor</th><th class="n">Met</th><th class="n">${esc(display.split(' ')[0])} ahead</th></tr></thead>
+            <tbody>${topRivals.map((v) => `<tr><td><button type="button" class="linkish" data-contractor="${esc(v.name)}">${esc(v.name)}</button></td><td class="n">${v.met}</td><td class="n">${v.ahead} of ${v.met}</td></tr>`).join('')}</tbody>
+          </table></div></section>` : ''}
+        </div>
+        <section class="panel"><h3>Tenders <span class="count">${fmtInt(rows.length)}</span></h3><div class="table-wrap"><table>
+          <thead><tr><th>Awarded</th><th>Tender</th><th>Result</th><th class="n">Their bid</th><th class="n">vs estimate</th></tr></thead>
+          <tbody>${rows.slice(0, 200).map((x) => `<tr${x.won ? ' class="l1"' : ''}>
+            <td>${x.r._award ? esc(shortDate.format(new Date(x.r._award))) : ''}</td>
+            <td><div class="item-name">${esc(x.r.title)}</div><small>${esc([x.r.district, x.r.dept].filter(Boolean).join(' · '))}</small></td>
+            <td>${x.won ? '<b>Won</b>' : x.mine?.rank ? `L${x.mine.rank}` : ''}${!x.won && x.r.winner ? `<small>Winner: <button type="button" class="linkish" data-contractor="${esc(x.r.winner)}">${esc(x.r.winner)}</button></small>` : ''}</td>
+            <td class="n">${x.mine?.amount ? money(x.mine.amount) : ''}</td>
+            <td class="n">${x.mine?.pct === null || x.mine?.pct === undefined ? '' : (x.mine.pct > 0 ? '+' : '') + x.mine.pct.toFixed(1) + '%'}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>${rows.length > 200 ? '<p class="note">Showing the latest 200.</p>' : ''}</section>
+      </div>`;
+    d.setAttribute('aria-hidden', 'false');
+    d.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    d.scrollTop = 0;
+    d.querySelector('[data-close]').focus();
+    const hash = '#c=' + encodeURIComponent(display);
+    if (location.hash !== hash) history.pushState({ contractor: display }, '', hash);
   }
 
   // ---------- Export ----------
@@ -917,8 +1023,7 @@
     const w = e.target.closest('[data-win]');
     if (!w) return;
     e.preventDefault();
-    R.q = w.dataset.win; $('q').value = R.q; applyResults();
-    window.scrollTo({ top: $('resultsView').offsetTop - 10 });
+    openContractor(w.dataset.win);
   });
   new IntersectionObserver((entries) => {
     if (entries.some((en) => en.isIntersecting) && !$('rMore').hidden && R.mode === 'results') moreResults();
@@ -940,6 +1045,8 @@
     const copy = e.target.closest('[data-copy]');
     if (copy) { navigator.clipboard?.writeText(copy.dataset.copy).then(() => toast('Tender number copied')); return; }
     if (e.target.closest('#drawer [data-close]')) { closeDrawer(); return; }
+    const who = e.target.closest('[data-contractor]');
+    if (who) { e.preventDefault(); openContractor(who.dataset.contractor); return; }
     const c = e.target.closest('.card');
     if (c) openTender(c.dataset.id);
   });
@@ -950,7 +1057,9 @@
   });
   window.addEventListener('popstate', () => {
     const m = location.hash.match(/^#t=(.+)$/);
+    const c = location.hash.match(/^#c=(.+)$/);
     if (m && S.byId.has(decodeURIComponent(m[1]))) openTender(decodeURIComponent(m[1]));
+    else if (c) openContractor(decodeURIComponent(c[1]));
     else closeDrawer({ fromHistory: true });
   });
 
@@ -961,6 +1070,11 @@
   new IntersectionObserver(([en]) => $('filters').classList.toggle('stuck', en.intersectionRatio < 1), { threshold: [1], rootMargin: '-1px 0px 0px 0px' }).observe($('filters'));
 
 
+  const deepContractor = location.hash.match(/^#c=(.+)$/);
+  if (deepContractor) {
+    history.replaceState(null, '', location.pathname);
+    openContractor(decodeURIComponent(deepContractor[1]));
+  }
   load().then(() => {
     const m = location.hash.match(/^#t=(.+)$/);
     if (m && S.byId.has(decodeURIComponent(m[1]))) {
