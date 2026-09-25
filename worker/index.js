@@ -1,7 +1,5 @@
 'use strict';
 
-import { handleAuthRoutes, requireAuthOrError, ensureAdminSeeded } from './auth.js';
-
 // Hourly collector commits fresh tenders.json / health.json here; deployed assets are the fallback.
 const RAW_BASES = [
   'https://raw.githubusercontent.com/santoshpawar863006-ctrl/santoshpawar863006-ctrl/main/public'
@@ -10,31 +8,6 @@ const KPPP_BASE = 'https://kppp.karnataka.gov.in';
 const KPPP_WORKS = KPPP_BASE + '/supplier-registration-service/v1/api/portal-service/works/search-eproc-tenders';
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36';
-
-function getSecret(env, ...names) {
-  for (const name of names) {
-    const raw = env?.[name];
-    if (raw === undefined || raw === null) continue;
-    let value = String(raw).trim();
-    // Dashboard pastes sometimes include wrapping quotes.
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1).trim();
-    }
-    if (value) return value;
-  }
-  return '';
-}
-
-function secretPresence(env) {
-  return {
-    ADMIN_USERNAME: Boolean(getSecret(env, 'ADMIN_USERNAME')),
-    ADMIN_PASSWORD: Boolean(getSecret(env, 'ADMIN_PASSWORD')),
-    ADMIN_NAME: Boolean(getSecret(env, 'ADMIN_NAME')),
-    SESSION_SECRET: Boolean(getSecret(env, 'SESSION_SECRET')),
-    AUTH_STORE: Boolean(env?.AUTH_STORE),
-    ASSETS: Boolean(env?.ASSETS)
-  };
-}
 
 function json(payload, status = 200, cache = 'no-store') {
   return new Response(JSON.stringify(payload), {
@@ -47,18 +20,11 @@ function json(payload, status = 200, cache = 'no-store') {
   });
 }
 
-async function proxyRaw(filename, ctx, ttl = 60, env = null, visibility = 'public') {
+async function proxyRaw(filename, ctx, ttl = 60, env = null) {
   const cache = caches.default;
   const cacheKey = new Request(`https://kppp-data.local/${filename}`, { method: 'GET' });
-  // The edge copy is shared; logged-in data must not sit in shared browser/proxy caches.
-  const forClient = (resp) => {
-    if (visibility !== 'private') return resp;
-    const headers = new Headers(resp.headers);
-    headers.set('Cache-Control', `private, max-age=${ttl}`);
-    return new Response(resp.body, { status: resp.status, headers });
-  };
   let response = await cache.match(cacheKey);
-  if (response) return forClient(response);
+  if (response) return response;
 
   const headersFor = (source) => new Headers({
     'Content-Type': 'application/json; charset=utf-8',
@@ -100,7 +66,7 @@ async function proxyRaw(filename, ctx, ttl = 60, env = null, visibility = 'publi
 
   if (!response) return json({ success: false, message: `${filename} is temporarily unavailable.` }, 502);
   ctx.waitUntil(cache.put(cacheKey, response.clone()));
-  return forClient(response);
+  return response;
 }
 
 function ageHours(value) {
@@ -124,6 +90,7 @@ async function systemHealth(ctx, env = {}) {
     status: age !== null && age <= 2 ? 'fresh' : (age !== null && age <= 6 ? 'stale' : 'very_stale'),
     age_hours: age === null ? null : Math.round(age * 100) / 100,
     count,
+    emd_known: Number(snapshot.emd_known || 0),
     category_counts: {
       WORKS: Number(counts.WORKS || 0),
       GOODS: Number(counts.GOODS || 0),
@@ -159,7 +126,6 @@ async function systemHealth(ctx, env = {}) {
     overall: database.ok && kppp.ok ? 'healthy' : 'attention',
     database,
     kppp,
-    secrets: secretPresence(env),
     hosting: { platform: 'Cloudflare Workers', live_data_source: 'GitHub hourly collector + deployed assets fallback' }
   }, 200, 'public, max-age=60, s-maxage=60');
 }
@@ -168,42 +134,19 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': '*' } });
-    }
-
-    // Seed default admin on cold starts when KV is available.
-    if (env.AUTH_STORE) {
-      ctx.waitUntil(ensureAdminSeeded(env).catch(() => {}));
-    }
-
-    // Auth/admin APIs must always be handled by the Worker (never static assets).
-    const path = url.pathname.replace(/\/+$/, '') || '/';
-
-    if (path.startsWith('/api/auth') || path.startsWith('/api/admin')) {
-      try {
-        const handled = await handleAuthRoutes(request, env, url);
-        if (handled) return handled;
-        return json({ success: false, message: 'Auth route not found.' }, 404);
-      } catch (err) {
-        return json({
-          success: false,
-          message: 'Auth handler error: ' + (err && err.message ? err.message : 'unknown')
-        }, 500);
-      }
+      return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,OPTIONS', 'Access-Control-Allow-Headers': '*' } });
     }
 
     if (request.method !== 'GET') return json({ success: false, message: 'Method not allowed.' }, 405);
 
     if (url.pathname === '/tenders-lite.json' || url.pathname === '/tenders.json') {
-      const denied = await requireAuthOrError(request, env);
-      if (denied) return denied;
-      return proxyRaw(url.pathname.slice(1), ctx, 300, env, 'private');
+      return proxyRaw(url.pathname.slice(1), ctx, 300, env);
     }
     if (url.pathname === '/health.json') return proxyRaw('health.json', ctx, 30, env);
-    if (url.pathname === '/api/system_health') {
-      const denied = await requireAuthOrError(request, env);
-      if (denied) return denied;
-      return systemHealth(ctx, env);
+    if (url.pathname === '/api/system_health') return systemHealth(ctx, env);
+    // Old bookmarks to the removed login/admin pages go to the tender list.
+    if (['/login', '/login.html', '/admin', '/admin.html'].includes(url.pathname)) {
+      return Response.redirect(new URL('/', url).toString(), 301);
     }
     if (url.pathname.startsWith('/api/')) {
       return json({ success: false, message: 'Not found.' }, 404);

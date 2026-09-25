@@ -114,6 +114,7 @@ jobs:
               "generated_at": new.get("generated_at"),
               "status": "healthy",
               "count": new_total,
+              "emd_known": sum(1 for t in new.get("tenders") or [] if (t.get("emd") or 0) > 0),
               "category_counts": {
                   "WORKS": int(new_counts.get("WORKS") or 0),
                   "GOODS": int(new_counts.get("GOODS") or 0),

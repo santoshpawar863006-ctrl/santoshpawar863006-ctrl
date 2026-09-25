@@ -3,21 +3,12 @@
   "name": "karnataka-tender-intelligence",
   "main": "./worker/index.js",
   "compatibility_date": "2026-08-12",
-  // Keep dashboard Variables/Secrets across wrangler deploys (Cloudflare Git builds).
-  "keep_vars": true,
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
     // Always invoke the Worker first so /api/* never falls through to static HTML.
     "run_worker_first": true
   },
-  "kv_namespaces": [
-    {
-      "binding": "AUTH_STORE",
-      "id": "094b38efb6504356af8490c0e3037103",
-      "preview_id": "00000000000000000000000000000002"
-    }
-  ],
   "observability": {
     "enabled": true
   }

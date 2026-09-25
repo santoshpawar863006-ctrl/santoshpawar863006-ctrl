@@ -109,11 +109,6 @@
     if (cached?.tenders?.length) ingest(cached);
     try {
       const r = await network;
-      if (r.status === 401) {
-        window.KPPPAuth?.clearSession?.();
-        location.replace('/login.html?next=/');
-        return;
-      }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const text = await r.text();
       const fresh = JSON.parse(text);
@@ -449,14 +444,11 @@
       const r = await fetch('/api/system_health', { cache: 'no-store' });
       const h = await r.json();
       const db = h.database || {};
-      const s = h.secrets || {};
       const row = (label, ok, text) => `<li><span>${label}</span><b class="${ok ? 'ok-t' : 'bad-t'}">${ok ? '✓' : '⚠'} ${esc(text)}</b></li>`;
       list.innerHTML = [
         row('Tender data', db.ok, `${fmtInt(db.count)} tenders · ${db.age_hours == null ? 'unknown age' : ago(db.last_success_at || db.generated_at)}`),
         row('KPPP connection', h.kppp?.ok, h.kppp?.ok ? 'Reachable' : `Not reachable (HTTP ${h.kppp?.http || '—'})`),
-        row('Admin password', s.ADMIN_PASSWORD, s.ADMIN_PASSWORD ? 'Set' : 'Missing'),
-        row('Session secret', s.SESSION_SECRET, s.SESSION_SECRET ? 'Set' : 'Missing'),
-        row('Login storage', s.AUTH_STORE, s.AUTH_STORE ? 'Connected' : 'Missing')
+        row('EMD & fee', db.emd_known > 0, `Known for ${fmtInt(db.emd_known)} tenders`)
       ].join('');
     } catch (err) {
       list.innerHTML = `<li><span>Status check</span><b class="bad-t">⚠ ${esc(err.message)}</b></li>`;
@@ -546,8 +538,6 @@
   }, { rootMargin: '600px' }).observe($('moreBtn'));
   new IntersectionObserver(([en]) => $('filters').classList.toggle('stuck', en.intersectionRatio < 1), { threshold: [1], rootMargin: '-1px 0px 0px 0px' }).observe($('filters'));
 
-  const user = window.KPPPAuth?.getUser?.();
-  if (user?.role === 'admin') $('statusBtn').hidden = false;
 
   load().then(() => {
     const m = location.hash.match(/^#t=(.+)$/);
