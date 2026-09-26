@@ -351,7 +351,9 @@ def collect(history, out, shard, shards):
     started = time.monotonic()
     out_of_time = lambda: time.monotonic() - started > TIME_BUDGET
     known = Store(history).known
-    filled = load_json(history / "state.json", {}).get("filled", False)
+    # "filled_all": every part of an earlier run went through all its pages, so the history is
+    # complete and this run only needs the new awards at the front of the list.
+    filled = load_json(history / "state.json", {}).get("filled_all", False)
     store = Store(out)
     session = make_session()
     pages = total_pages(session)
@@ -360,6 +362,7 @@ def collect(history, out, shard, shards):
     mine = list(range(shard, pages + 1, shards))
     print(f"Part {shard + 1}/{shards}: {len(mine)} of {pages} pages; {len(known)} already in history", flush=True)
     ok = failed = 0
+    known_in_a_row, caught_up = 0, False
     stats = {"pages_done": 0, "pages": len(mine)}
 
     def run(raw):
@@ -375,8 +378,12 @@ def collect(history, out, shard, shards):
                 print(f"Could not list page {page}: {exc}", flush=True)
                 continue
             todo = [raw for raw in batch if str(raw.get("nitId")) not in known and str(raw.get("nitId")) not in store.known]
-            if filled and not todo:
-                break  # history is complete: this part has caught up with what is known
+            # New awards push rows to later pages, so one fully known page can be a fluke; three in a
+            # row means this part has caught up with what the history already has.
+            known_in_a_row = 0 if todo else known_in_a_row + 1
+            if filled and known_in_a_row >= 3:
+                caught_up = True
+                break
             for future in as_completed([pool.submit(run, raw) for raw in todo]):
                 try:
                     done = future.result()
@@ -390,7 +397,7 @@ def collect(history, out, shard, shards):
             if n % 25 == 0 or n <= 3:
                 print(f"  {n}/{len(mine)} pages, {ok} new, {failed} failed ({int(time.monotonic() - started)}s)", flush=True)
     store.save()
-    stats.update(new=ok, failed=failed, finished=stats["pages_done"] == len(mine) or filled)
+    stats.update(new=ok, failed=failed, finished=stats["pages_done"] == len(mine) or caught_up)
     (out / "part.json").write_text(json.dumps(stats), encoding="utf-8")
     print(f"Part {shard + 1} done: {ok} new, {failed} failed, {stats['pages_done']}/{len(mine)} pages ({int(time.monotonic() - started)}s)")
 
@@ -401,7 +408,9 @@ def build(history, parts):
     store = Store(history)
     state = load_json(history / "state.json", {})
     print(f"History has {len(store.known)} works results; seeded {seed_from_recent(store)} from the website's recent results", flush=True)
-    finished = bool(parts)
+    # Complete only when every part ran and went through all of its pages.
+    expected = int(os.getenv("HISTORY_PARTS", "4"))
+    finished = len(parts) == expected
     for part in parts:
         info = load_json(part / "part.json", {})
         finished = finished and bool(info.get("finished"))
@@ -411,8 +420,8 @@ def build(history, parts):
             for nit, record in records.items():
                 store.add(record, items.get(nit))
         print(f"  merged {part.name}: {info}", flush=True)
-    if finished:
-        state["filled"] = True
+    state.pop("filled", None)  # older runs set this too early
+    state["filled_all"] = finished
     store.save()
     (history / "state.json").write_text(json.dumps(state), encoding="utf-8")
 
@@ -431,7 +440,7 @@ def build(history, parts):
         "with_bids": sum(1 for r in results if r.get("bidders")),
         "from": closed[0][:10] if closed else None,
         "to": closed[-1][:10] if closed else None,
-        "complete": bool(state.get("filled")),
+        "complete": bool(state.get("filled_all")),
         "contractors": contractors,
         "files": files,
     }, ensure_ascii=False, indent=1), encoding="utf-8")
