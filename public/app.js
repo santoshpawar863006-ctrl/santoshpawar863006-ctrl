@@ -91,17 +91,17 @@
     apply();
   }
 
-  async function readCache() {
+  async function readCache(url = DATA_URL) {
     try {
       const cache = await caches.open(CACHE_NAME);
-      const hit = await cache.match(DATA_URL);
+      const hit = await cache.match(url);
       return hit ? await hit.json() : null;
     } catch { return null; }
   }
-  async function writeCache(text) {
+  async function writeCache(text, url = DATA_URL) {
     try {
       const cache = await caches.open(CACHE_NAME);
-      await cache.put(DATA_URL, new Response(text, { headers: { 'Content-Type': 'application/json' } }));
+      await cache.put(url, new Response(text, { headers: { 'Content-Type': 'application/json' } }));
     } catch {}
   }
 
@@ -661,27 +661,51 @@
   const pctText = (p) => (p === null || p === undefined ? '—' : `${Math.abs(p).toFixed(1)}% ${p < 0 ? 'below' : p > 0 ? 'above' : 'at'} estimate`);
   const winPct = (r) => r.bidders?.[0]?.pct ?? null;
 
+  const RESULTS_URL = '/results-lite.json';
+  function ingestResults(d) {
+    R.generatedAt = d.generated_at || null;
+    R.all = (d.results || []).map((r) => {
+      r._award = r.awarded ? Date.parse(r.awarded) : (r.closed ? Date.parse(r.closed) : 0);
+      r._hay = [r.title, r.ref, r.dept, r.office, r.district, r.work, r.winner, ...(r.bidders || []).map((b) => b.name)].filter(Boolean).join(' ').toLowerCase();
+      return r;
+    });
+    R.byNit = new Map(R.all.map((r) => [r.nit, r]));
+    const fill = (id, label, key) => {
+      const counts = new Map();
+      for (const r of R.all) if (r[key]) counts.set(r[key], (counts.get(r[key]) || 0) + 1);
+      const sel = $(id);
+      const current = sel.value;
+      sel.innerHTML = `<option value="">${label}</option>` + [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([v, c]) => `<option value="${esc(v)}">${esc(v)} (${fmtInt(c)})</option>`).join('');
+      if (current && counts.has(current)) sel.value = current;
+    };
+    fill('rDistrict', 'All districts', 'district');
+    fill('rDept', 'All departments', 'dept');
+    fill('rWork', 'All types of work', 'work');
+    return R.all;
+  }
+
+  // Like the tenders: show the copy saved in the browser at once, then swap in the fresh one.
   function loadResults() {
     if (!R.loading) {
-      R.loading = fetch('/results-lite.json', { cache: 'no-cache' })
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-        .then((d) => {
-          R.all = (d.results || []).map((r) => {
-            r._award = r.awarded ? Date.parse(r.awarded) : (r.closed ? Date.parse(r.closed) : 0);
-            r._hay = [r.title, r.ref, r.dept, r.office, r.district, r.work, r.winner, ...(r.bidders || []).map((b) => b.name)].filter(Boolean).join(' ').toLowerCase();
-            return r;
-          });
-          const fill = (id, label, key) => {
-            const counts = new Map();
-            for (const r of R.all) if (r[key]) counts.set(r[key], (counts.get(r[key]) || 0) + 1);
-            $(id).innerHTML = `<option value="">${label}</option>` + [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([v, c]) => `<option value="${esc(v)}">${esc(v)} (${fmtInt(c)})</option>`).join('');
-          };
-          fill('rDistrict', 'All districts', 'district');
-          fill('rDept', 'All departments', 'dept');
-          fill('rWork', 'All types of work', 'work');
+      R.loading = (async () => {
+        const network = fetch(RESULTS_URL, { cache: 'no-cache' })
+          .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))));
+        const cached = await readCache(RESULTS_URL);
+        const refresh = network.then((text) => {
+          const fresh = JSON.parse(text);
+          if (!cached || cached.generated_at !== fresh.generated_at) {
+            ingestResults(fresh);
+            if (cached && R.mode === 'results') applyResults({ keepPage: true });
+          }
+          writeCache(text, RESULTS_URL);
           return R.all;
-        })
-        .catch((err) => { R.loading = null; throw err; });
+        });
+        if (cached?.results?.length) {
+          refresh.catch(() => {});
+          return ingestResults(cached);
+        }
+        return refresh;
+      })().catch((err) => { R.loading = null; throw err; });
     }
     return R.loading;
   }
@@ -695,7 +719,7 @@
     $('q').placeholder = mode === 'results' ? 'Search results by work, department, town or contractor name…' : 'Search by work, tender number, department or town…';
     if (mode === 'results') {
       $('rTitle').textContent = 'Loading results…';
-      loadResults().then(applyResults).catch((err) => {
+      loadResults().then(() => applyResults()).catch((err) => {
         $('rTitle').textContent = 'Results are not available yet';
         $('rList').innerHTML = `<div class="empty"><strong>Past results are still being collected.</strong>Please check again later. (${esc(err.message)})</div>`;
       });
@@ -722,8 +746,9 @@
     };
   }
 
-  function applyResults() {
+  function applyResults({ keepPage = false } = {}) {
     if (!R.all) return;
+    const keep = keepPage ? Math.max(R.shown, PAGE) : 0;
     const f = { q: R.q, cat: $('rCat').value, district: $('rDistrict').value, dept: $('rDept').value, work: $('rWork').value };
     const list = filterResults(f);
     const sort = $('rSort').value;
@@ -745,6 +770,7 @@
     for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork']) $(id).classList.toggle('set', Boolean($(id).value));
     $('rList').innerHTML = '';
     moreResults();
+    while (R.shown < Math.min(keep, R.filtered.length)) moreResults();
   }
 
   function resultRow(r) {
@@ -1102,7 +1128,7 @@
   setView(readJSON(VIEW_KEY, 'cards'));
   document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
   document.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
-  for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork', 'rSort']) $(id).addEventListener('change', applyResults);
+  for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork', 'rSort']) $(id).addEventListener('change', () => applyResults());
   $('rMore').addEventListener('click', moreResults);
   $('rReset').addEventListener('click', () => {
     for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork']) $(id).value = '';
@@ -1165,6 +1191,9 @@
     openContractor(decodeURIComponent(deepContractor[1]));
   }
   load().then(() => {
+    // Get past results ready in the background so the "Past results" tab opens instantly.
+    const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
+    idle(() => loadResults().catch(() => {}));
     const m = location.hash.match(/^#t=(.+)$/);
     if (m && S.byId.has(decodeURIComponent(m[1]))) {
       history.replaceState(null, '', location.pathname);
