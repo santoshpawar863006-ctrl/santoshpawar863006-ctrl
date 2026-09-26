@@ -568,6 +568,7 @@
     const itemCount = f.groups.reduce((n, g) => n + g.items.length, 0);
     const items = itemCount ? `<section class="panel" id="tpBoq"><h3>${t.cat === 'WORKS' ? 'Bill of quantities' : 'Items'} <span class="count">${fmtInt(itemCount)}</span></h3>
       <div id="boqPricing"></div>
+      <div class="win-sum" id="winMoreSum" hidden></div>
       <div class="mybid" id="myBid"></div>
       <div class="mybid-float" id="myBidFloat" hidden></div>
       ${f.groups.map((g, gi) => {
@@ -575,15 +576,16 @@
         const showRate = g.items.some((i) => i.rate > 1);
         const showAmt = g.items.some((i) => i.amount > 1);
         return `<div class="boq">
-        ${g.name || g.total ? `<div class="boq-head"><b>${esc(g.name || 'Items')}</b>${g.note ? `<span class="badge soft">${esc(g.note)}</span>` : ''}${g.total ? `<span class="spacer"></span><strong>${money(g.total, { full: true })}</strong>` : ''}</div>` : ''}
+        ${g.name || g.total ? `<div class="boq-head"><b>${esc(g.name || 'Items')}</b>${g.note ? `<span class="badge soft">${esc(g.note)}</span>` : ''}${g.total ? `<span class="spacer"></span><strong>${money(g.total, { full: true })}</strong>` : ''}<span class="win-group" data-wg="${gi}"></span></div>` : ''}
         <div class="table-wrap"><table>
-          <thead><tr><th>#</th><th>Item</th><th class="n">Qty</th><th>Unit</th>${showRate ? '<th class="n">Rate</th>' : ''}${showAmt ? '<th class="n">Amount</th>' : ''}<th class="n my">Your rate</th><th class="n my">Your amount</th></tr></thead>
+          <thead><tr><th>#</th><th>Item</th><th class="n">Qty</th><th>Unit</th>${showRate ? '<th class="n">Rate</th>' : ''}${showAmt ? '<th class="n">Amount</th>' : ''}<th class="n win" title="Department rate at the 'To win more often' level">To win more often</th><th class="n win">Win-more amount</th><th class="n my">Your rate</th><th class="n my">Your amount</th></tr></thead>
           <tbody>${g.items.map((i, ii) => `<tr data-item="${gi}:${ii}"${ii >= 12 ? ` class="more-row" data-group="${gi}" hidden` : ''}>
             <td>${esc(i.code || ii + 1)}</td>
             <td><div class="item-name">${esc(i.name)}</div>${i.spec && i.spec !== i.name ? `<small>${esc(i.spec)}</small>` : ''}${i.section ? `<small>${esc(i.section)}</small>` : ''}</td>
             <td class="n">${i.qty ?? ''}</td><td>${esc(i.unit)}</td>
             ${showRate ? `<td class="n">${i.rate ? money(i.rate, { full: true }) : ''}<span class="past-rate" data-past="${gi}:${ii}"></span></td>` : ''}
             ${showAmt ? `<td class="n">${i.amount ? money(i.amount, { full: true }) : ''}</td>` : ''}
+            <td class="n win" data-wr="${gi}:${ii}"></td><td class="n win" data-wa="${gi}:${ii}"></td>
             <td class="n my"><input type="number" min="0" step="any" inputmode="decimal" data-my="${gi}:${ii}" aria-label="Your rate for item ${esc(i.code || ii + 1)}" placeholder="₹"></td>
             <td class="n my" data-myamt="${gi}:${ii}"></td>
           </tr>`).join('')}</tbody>
@@ -611,6 +613,7 @@
     if (G.t === t) G.f = f;
     if (itemCount) setupMyBid(t, f);
     updateBidGuide();
+    renderWinMore();
     if (t.cat === 'WORKS' && itemCount) annotateRates(t, f);
     loadFiles(t);
     if (f.partial) {
@@ -636,13 +639,16 @@
     const simQ = useSim ? (useSim.q || [quart(useSim.pcts, 0.25), quart(useSim.pcts, 0.5), quart(useSim.pcts, 0.75)]) : null;
     const simN = useSim ? (useSim.q ? useSim.count : useSim.pcts.length) : 0;
     const useItems = ratio && cover >= 30 ? ratio : null;
-    if (!base || (!useSim && !useItems)) { box.hidden = true; G.rec = null; return; }
+    if (!base || (!useSim && !useItems)) { box.hidden = true; G.rec = null; G.lowPct = null; renderWinMore(); return; }
     const simBid = useSim ? base * (1 + simQ[1] / 100) : null;
     const itemBid = useItems ? base * useItems : null;
     // Real winning totals of similar tenders come first; item rates are the fallback.
     const rec = simBid || itemBid;
     G.rec = rec;
     const low = useSim ? base * (1 + simQ[0] / 100) : rec * 0.97;
+    // Same "win more often" level item by item: % against the department's rates.
+    G.lowPct = (low / base - 1) * 100;
+    renderWinMore();
     const high = useSim ? base * (1 + simQ[2] / 100) : rec * 1.03;
     const vs = (x) => { const p = (x / base - 1) * 100; return `${Math.abs(p).toFixed(1)}% ${p <= 0 ? 'below' : 'above'} ${num(t.value) ? 'tender value' : 'estimate'}`; };
     const hasBoq = Boolean($('tpBoq'));
@@ -664,6 +670,38 @@
     G.recalc?.();
   }
 
+  function renderWinMore() {
+    const f = G.f;
+    const box = $('winMoreSum');
+    if (!f || !box || $('tpBoq') === null) return;
+    const factor = G.lowPct === null || G.lowPct === undefined ? null : 1 + G.lowPct / 100;
+    G.winMore = new Map();
+    let total = 0, dept = 0, priced = 0, count = 0;
+    f.groups.forEach((g, gi) => {
+      let groupTotal = 0;
+      g.items.forEach((i, ii) => {
+        const k = `${gi}:${ii}`;
+        count++;
+        const rate = i.rate > 1 ? i.rate : null; // goods often carry ₹1 placeholders
+        const wr = factor && rate ? rate * factor : null;
+        const amt = wr && num(i.qty) ? wr * i.qty : null;
+        const rc = document.querySelector(`[data-wr="${k}"]`);
+        const ac = document.querySelector(`[data-wa="${k}"]`);
+        if (rc) rc.textContent = wr ? money(wr, { full: true }) : '—';
+        if (ac) ac.textContent = amt ? money(amt, { full: true }) : '';
+        if (wr) { G.winMore.set(k, wr); priced++; }
+        if (amt) { total += amt; groupTotal += amt; dept += num(i.amount) || rate * i.qty; }
+      });
+      const gs = document.querySelector(`[data-wg="${gi}"]`);
+      if (gs) gs.textContent = groupTotal ? ` · win-more ${money(groupTotal, { full: true })}` : '';
+    });
+    if (!factor || !priced) { box.hidden = true; return; }
+    box.hidden = false;
+    box.innerHTML = `<div><span>To win more often — total for these items</span><strong>${money(total, { full: true })}</strong>
+      <small>every item at ${Math.abs(G.lowPct).toFixed(1)}% ${G.lowPct <= 0 ? 'below' : 'above'} the department's rate · ${fmtInt(priced)} of ${fmtInt(count)} items${dept ? ` · department total ${money(dept, { full: true })}` : ''}</small></div>
+      <p class="note">Lower than 3 in 4 past winning bids of similar tenders. Check each rate against your own cost — use “Fill rates: To win more often” below to start from these and adjust.</p>`;
+  }
+
   function setupMyBid(t, f) {
     const box = $('myBid');
     if (!box) return;
@@ -678,6 +716,7 @@
       <div class="mybid-sum" id="myBidSum"></div>
       <div class="mybid-actions">
         <span class="lbl">Fill rates:</span>
+        <button class="btn" type="button" data-fill="win">To win more often</button>
         ${t.cat === 'WORKS' ? '<button class="btn" type="button" data-fill="past">Past winning rates</button>' : ''}
         <span class="fill-pct"><button class="btn" type="button" data-fill="pct">Department rate</button><input type="number" id="fillPct" value="-10" step="0.5" inputmode="decimal" aria-label="Percent above or below department rate">%</span>
         <button class="btn ghost" type="button" data-fill="clear">Clear</button>
@@ -736,6 +775,12 @@
         for (const inp of inputs) { const i = item(inp.dataset.my); if (num(i.rate)) { inp.value = (i.rate * (1 + p / 100)).toFixed(2); n++; } }
         recalc(); toast(n ? `${n} items filled at department rate ${p > 0 ? '+' : ''}${p}%` : 'This tender has no department rates to start from');
       }
+      if (fill === 'win') {
+        if (!G.winMore?.size) { toast('No "to win more often" level for this tender yet'); return; }
+        let n = 0;
+        for (const inp of inputs) { const w = G.winMore.get(inp.dataset.my); if (w) { inp.value = w.toFixed(2); n++; } }
+        recalc(); toast(`${n} items filled at the "to win more often" level`);
+      }
       if (fill === 'past') {
         if (!G.past.size) { toast('Past winning rates are still loading or not found for these items'); return; }
         let n = 0, other = 0;
@@ -772,7 +817,8 @@
       const my = mine.get(k);
       const myAmt = my !== null && my !== undefined ? my * (i.qty || 0) : dAmt;
       deptTotal += dAmt || 0; myTotal += myAmt || 0;
-      rows.push({ no: i.code || ii + 1, group: g.name || '', name: i.name || '', qty: i.qty ?? '', unit: i.unit || '', rate: num(i.rate), amt: dAmt, past: G.f === f ? G.past.get(k) ?? null : null, my: my ?? null, myAmt: myAmt ?? null });
+      const win = G.f === f ? G.winMore?.get(k) ?? null : null;
+      rows.push({ no: i.code || ii + 1, group: g.name || '', name: i.name || '', qty: i.qty ?? '', unit: i.unit || '', rate: num(i.rate), amt: dAmt, win, winAmt: win && i.qty ? win * i.qty : null, past: G.f === f ? G.past.get(k) ?? null : null, my: my ?? null, myAmt: myAmt ?? null });
     }));
     const pct = deptTotal ? (myTotal / deptTotal - 1) * 100 : null;
     const title = `My bid — ${t.ref}`;
@@ -783,13 +829,14 @@
       if (kind === 'xlsx') {
         toast('Preparing Excel file…');
         await loadScript('/vendor/xlsx.mini.min.js');
-        const head = ['Item no.', 'Item', 'Qty', 'Unit', 'Department rate', 'Department amount', 'Past winners (median rate)', 'My rate', 'My amount'];
+        const winTotal = rows.reduce((n, r) => n + (r.winAmt || 0), 0);
+        const head = ['Item no.', 'Item', 'Qty', 'Unit', 'Department rate', 'Department amount', 'To win more often (rate)', 'To win more often (amount)', 'Past winners (median rate)', 'My rate', 'My amount'];
         const aoa = [[title], ...info, [], head,
-          ...rows.map((r) => [r.no, r.name, r2(r.qty), r.unit, r2(r.rate), r2(r.amt), r2(r.past), r2(r.my), r2(r.myAmt)]),
-          [], ['', 'TOTAL', '', '', '', r2(deptTotal), '', '', r2(myTotal)],
+          ...rows.map((r) => [r.no, r.name, r2(r.qty), r.unit, r2(r.rate), r2(r.amt), r2(r.win), r2(r.winAmt), r2(r.past), r2(r.my), r2(r.myAmt)]),
+          [], ['', 'TOTAL', '', '', '', r2(deptTotal), '', r2(winTotal) || '', '', '', r2(myTotal)],
           ['', pct === null ? '' : `My bid is ${Math.abs(pct).toFixed(2)}% ${pct <= 0 ? 'below' : 'above'} the department's estimate`]];
         const ws = window.XLSX.utils.aoa_to_sheet(aoa);
-        ws['!cols'] = [{ wch: 14 }, { wch: 60 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 14 }, { wch: 18 }];
+        ws['!cols'] = [{ wch: 14 }, { wch: 60 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 18 }, { wch: 18 }, { wch: 20 }, { wch: 16 }, { wch: 14 }, { wch: 18 }];
         const wb = window.XLSX.utils.book_new();
         window.XLSX.utils.book_append_sheet(wb, ws, 'My bid');
         window.XLSX.writeFile(wb, fileBase + '.xlsx');
@@ -805,12 +852,12 @@
         doc.text(doc.splitTextToSize(info.map((x) => x[0]).join('\n'), 760), 40, 58);
         doc.autoTable({
           startY: 100,
-          head: [['No.', 'Item', 'Qty', 'Unit', 'Dept. rate', 'Dept. amount', 'Past winners', 'My rate', 'My amount']],
-          body: rows.map((r) => [r.no, r.name.slice(0, 160), r.qty, r.unit, rs(r.rate), rs(r.amt), rs(r.past), rs(r.my), rs(r.myAmt)]),
-          foot: [['', 'TOTAL', '', '', '', rs(deptTotal), '', '', rs(myTotal)]],
+          head: [['No.', 'Item', 'Qty', 'Unit', 'Dept. rate', 'Dept. amount', 'Win-more rate', 'Win-more amount', 'Past winners', 'My rate', 'My amount']],
+          body: rows.map((r) => [r.no, r.name.slice(0, 160), r.qty, r.unit, rs(r.rate), rs(r.amt), rs(r.win), rs(r.winAmt), rs(r.past), rs(r.my), rs(r.myAmt)]),
+          foot: [['', 'TOTAL', '', '', '', rs(deptTotal), '', rs(rows.reduce((n, r) => n + (r.winAmt || 0), 0)) || '', '', '', rs(myTotal)]],
           styles: { fontSize: 7.5, cellPadding: 3, overflow: 'linebreak' },
           headStyles: { fillColor: [79, 70, 229] }, footStyles: { fillColor: [229, 247, 239], textColor: [4, 120, 87] },
-          columnStyles: { 1: { cellWidth: 250 }, 2: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'right' }, 7: { halign: 'right' }, 8: { halign: 'right' } },
+          columnStyles: { 1: { cellWidth: 190 }, 2: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'right' }, 7: { halign: 'right' }, 8: { halign: 'right' }, 9: { halign: 'right' }, 10: { halign: 'right' } },
           margin: { left: 40, right: 40 }
         });
         const y = doc.lastAutoTable.finalY + 20;
@@ -1190,6 +1237,7 @@
     if ($('tpSimilar') !== box) return;
     if (G.t === t) { G.sim = sim; updateBidGuide(); }
     if (!sim || sim.median === null) { box.hidden = true; return; }
+    sim.top = (sim.top || []).filter(([n]) => /[a-z]{2}/i.test(n));
     box.hidden = false;
     box.innerHTML = `<h3>How similar tenders were won</h3>
       <p class="muted-p">Based on ${fmtInt(sim.count)} awarded tenders${sim.history ? ' since 2023' : ''} for ${esc(sim.scope)}.</p>
@@ -1637,9 +1685,14 @@
       const rows = [];
       f.groups.forEach((g, gi) => g.items.forEach((i, ii) => {
         const my = saved[`${gi}:${ii}`];
-        rows.push([i.code || ii + 1, i.name || '', i.qty ?? '', i.unit || '', num(i.rate) || '', num(i.amount) || '', my ?? '', my != null && i.qty ? Math.round(my * i.qty * 100) / 100 : '']);
+        const win = G.t === t ? G.winMore?.get(`${gi}:${ii}`) : null;
+        rows.push([i.code || ii + 1, i.name || '', i.qty ?? '', i.unit || '', num(i.rate) || '', num(i.amount) || '',
+          win ? Math.round(win * 100) / 100 : '', win && i.qty ? Math.round(win * i.qty * 100) / 100 : '',
+          my ?? '', my != null && i.qty ? Math.round(my * i.qty * 100) / 100 : '']);
       }));
-      sections.push({ heading: t.cat === 'WORKS' ? 'Bill of quantities' : 'Items', head: ['Item no.', 'Item', 'Qty', 'Unit', 'Dept. rate', 'Dept. amount', 'My rate', 'My amount'], rows, widths: [12, 70, 10, 10, 14, 16, 12, 16] });
+      const winTotal = rows.reduce((n, r) => n + (Number(r[7]) || 0), 0);
+      if (winTotal) rows.push(['', 'TOTAL (to win more often)', '', '', '', '', '', Math.round(winTotal * 100) / 100, '', '']);
+      sections.push({ heading: t.cat === 'WORKS' ? 'Bill of quantities' : 'Items', head: ['Item no.', 'Item', 'Qty', 'Unit', 'Dept. rate', 'Dept. amount', 'Win-more rate', 'Win-more amount', 'My rate', 'My amount'], rows, widths: [12, 70, 10, 10, 14, 16, 14, 16, 12, 16] });
     }
     await downloadDoc({ title: t.title, lines: [`${t.ref} · ${t.dept || ''}`, 'From TenderOne (KPPP data) · ' + new Date().toLocaleDateString('en-IN')], sections, fileBase: `tender-${safeFile(t.ref)}` }, kind);
   }
