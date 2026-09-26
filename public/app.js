@@ -1013,11 +1013,21 @@
     document.querySelectorAll('[data-mode]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.mode === mode)));
     $('liveView').hidden = mode !== 'live';
     $('resultsView').hidden = mode !== 'results';
-    $('q').value = mode === 'results' ? R.q : S.q;
-    $('q').placeholder = mode === 'results' ? 'Search results by work, department, town or contractor name…' : 'Search by work, tender number, department or town…';
+    $('biddersView').hidden = mode !== 'bidders';
+    $('q').value = mode === 'results' ? R.q : mode === 'bidders' ? B.q : S.q;
+    $('q').placeholder = mode === 'results' ? 'Search results by work, department, town or contractor name…'
+      : mode === 'bidders' ? 'Search a bidder or firm name…' : 'Search by work, tender number, department or town…';
+    if (mode === 'bidders') {
+      loadLeaders();
+      loadDownloads();
+      $('bTitle').textContent = 'Loading bidders…';
+      loadBidders().then(() => applyBidders()).catch(() => {
+        $('bTitle').textContent = 'The bidder list is still being built';
+        $('bList').innerHTML = '<div class="empty"><strong>Not ready yet.</strong>The full bidder list appears after tonight\'s history update.</div>';
+      });
+    }
     if (mode === 'results') {
       loadDownloads();
-      loadLeaders();
       $('rTitle').textContent = 'Loading results…';
       loadResults().then(() => applyResults()).catch((err) => {
         $('rTitle').textContent = 'Results are not available yet';
@@ -1039,6 +1049,63 @@
     const compact = terms.join('');
     return r._names.filter(([, n]) => terms.every((w) => n.includes(w)) || n.replace(/ /g, '').includes(compact)).map(([name]) => name);
   }
+  // ---------- Bidders tab: every bidder from the whole history (bidders.json) ----------
+  const B = { all: null, loading: null, q: '', shown: 0, list: [] };
+  function loadBidders() {
+    if (!B.loading) {
+      B.loading = fetch('/bidders.json').then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))).then((d) => {
+        // [name, bids, wins, value, latest, districts, usual winning %]
+        B.all = (d.bidders || []).map(([name, bids, wins, value, last, districts, winPct]) => {
+          const who = splitName(name);
+          return { name, firm: who.firm, person: who.person, bids, wins, value, last, districts: districts || [], winPct, _hay: norm(name), _hayc: norm(name).replace(/ /g, '') };
+        });
+        const ds = [...new Set(B.all.flatMap((b) => b.districts))].sort();
+        $('bDistrict').innerHTML = '<option value="">All districts</option>' + ds.map((x) => `<option>${esc(x)}</option>`).join('');
+        return B.all;
+      }).catch((err) => { B.loading = null; throw err; });
+    }
+    return B.loading;
+  }
+  function applyBidders() {
+    if (!B.all) return;
+    const terms = norm(B.q).trim().split(' ').filter(Boolean);
+    const district = $('bDistrict').value;
+    const min = Number($('bMin').value) || 0;
+    const list = B.all.filter((b) => (!district || b.districts.includes(district)) && b.bids >= min
+      && (!terms.length || terms.every((w) => b._hay.includes(w)) || b._hayc.includes(terms.join(''))));
+    const by = {
+      wins: (a, b) => b.wins - a.wins || b.bids - a.bids,
+      bids: (a, b) => b.bids - a.bids,
+      rate: (a, b) => (b.bids >= 5) - (a.bids >= 5) || b.wins / b.bids - a.wins / a.bids,
+      value: (a, b) => (b.value || 0) - (a.value || 0),
+      latest: (a, b) => String(b.last || '').localeCompare(String(a.last || '')),
+      name: (a, b) => a.firm.localeCompare(b.firm)
+    }[$('bSort').value];
+    list.sort(by);
+    B.list = list; B.shown = 0;
+    $('rLeaders').style.display = terms.length ? 'none' : ''; // searching: show the matches first
+    $('bTitle').innerHTML = `${fmtInt(list.length)} <span>bidders</span>`;
+    $('bList').innerHTML = list.length ? `<div class="table-wrap"><table class="lead bidders-table">
+      <thead><tr><th>#</th><th>Bidder</th><th class="n">Bid</th><th class="n">Won</th><th class="n">Win rate</th><th class="n">Value won</th><th>Works in</th><th>Latest bid</th></tr></thead>
+      <tbody id="bRows"></tbody></table></div>` : '<div class="empty"><strong>No bidders match.</strong>Try a different name or remove a filter.</div>';
+    moreBidders();
+  }
+  function moreBidders() {
+    const next = B.list.slice(B.shown, B.shown + 50);
+    $('bRows')?.insertAdjacentHTML('beforeend', next.map((b, i) => `<tr>
+      <td>${B.shown + i + 1}</td>
+      <td><button type="button" class="linkish" data-contractor="${esc(b.name)}">${isWatched(b.name) ? '👁 ' : ''}${esc(b.firm)}</button>${b.person ? `<small class="who">${esc(b.person)}</small>` : ''}</td>
+      <td class="n">${fmtInt(b.bids)}</td><td class="n"><b>${fmtInt(b.wins)}</b></td>
+      <td class="n">${b.bids ? Math.round(b.wins / b.bids * 100) + '%' : ''}</td>
+      <td class="n">${b.value ? money(b.value) : '—'}</td>
+      <td><small>${esc(b.districts.join(', '))}</small></td>
+      <td><small>${b.last ? esc(shortDate.format(new Date(b.last))) + ' ' + esc(b.last.slice(0, 4)) : ''}</small></td></tr>`).join(''));
+    B.shown += next.length;
+    const left = B.list.length - B.shown;
+    $('bMore').hidden = left <= 0;
+    $('bMore').textContent = `Show more (${fmtInt(left)} left)`;
+  }
+
   // Top bidders by wins, for every district and year, from the whole history (leaders.json).
   let leaders = null;
   async function loadLeaders() {
@@ -1094,6 +1161,7 @@
     const years = idx.files.filter((f) => f.year);
     const rates = idx.files.find((f) => f.file === 'works-item-rates.xlsx');
     const bidderDb = idx.files.find((f) => f.file === 'works-bidders.xlsx');
+    if (bidderDb) $('bDownload').innerHTML = `<a class="btn" href="/downloads/${esc(bidderDb.file)}" download>${dlIcon} Bidder database (Excel, ${mb(bidderDb.bytes)})</a>`;
     box.hidden = false;
     box.innerHTML = `<h3>Download all past works results (Excel) <span class="count">${fmtInt(idx.tenders)} tenders</span></h3>
       <p class="muted-p">Every awarded works tender${idx.from ? ` from ${esc(shortDate.format(new Date(idx.from)))} ${esc(idx.from.slice(0, 4))}` : ''} with the winner and every bidder's amount.${idx.complete ? '' : ' <b>Still collecting older tenders</b> — the files grow every few hours.'}</p>
@@ -1322,9 +1390,9 @@
     return Number.isFinite(d) ? Math.round(d) : null;
   }
 
-  async function openAward(nit) {
-    try { await loadResults(); } catch { toast('Past results are not available yet'); return; }
-    const r = R.byNit?.get(String(nit));
+  async function openAward(nit, extra = null) {
+    try { await loadResults(); } catch {}
+    const r = R.byNit?.get(String(nit)) || extra?.r;
     if (!r) { toast('This result is not in our records yet'); return; }
     lastFocus = document.activeElement;
     const p = winPct(r);
@@ -1369,6 +1437,7 @@
 
     const box = $('awardMore');
     try {
+      if (extra?.a) awardCache.set(r.nit, Promise.resolve(extra.a));
       if (!awardCache.has(r.nit)) {
         awardCache.set(r.nit, fetch(`/api/award/${encodeURIComponent(r.nit)}`).then((x) => (x.ok ? x.json() : Promise.reject(new Error(`HTTP ${x.status}`)))));
       }
@@ -1516,6 +1585,22 @@
       <div class="bar"><span>${esc(k)}</span><i style="--w:${Math.max(4, Math.round(n / total * 100))}%"></i><b>${fmtInt(n)}</b></div>`).join('')}</div></section>`;
   }
 
+  // A past tender from the whole history: every bidder and their item-wise rates.
+  async function openTenderBids(nit, month) {
+    if (R.byNit?.has(String(nit))) { openAward(nit); return; }
+    const row = cpRows.find((x) => String(x.r.nit) === String(nit));
+    let j = null;
+    try { const res = await fetch(`/api/tender-bids/${encodeURIComponent(nit)}?m=${encodeURIComponent(month)}`); j = res.ok ? await res.json() : null; } catch {}
+    if (!j?.success) { toast('Bids for this tender are not available yet'); return; }
+    const bidders = j.bidders.map(([name, amount, rank, pct]) => ({ name, amount, rank, pct })).sort((a, b) => (a.rank || 99) - (b.rank || 99));
+    const base = row?.r || {};
+    const r = { nit: String(nit), ref: base.ref, title: base.title || base.ref || 'Tender', district: base.district, dept: base.dept,
+      value: base.value, closed: base.closed, winner: bidders[0]?.name || base.winner, bidders, cat: 'WORKS', _award: Date.parse(base.closed) || 0 };
+    const a = { bidders, items: j.items.map(([code, name, unit, qty, est, rates]) => ({ code, name, unit, qty, est, rates })) };
+    openAward(nit, { r, a });
+  }
+
+  let cpRows = [];
   async function openContractor(name) {
     // Whole works history since 2023 (collect_history.py), plus the recent results loaded here.
     const histReq = fetch(`/api/contractor?name=${encodeURIComponent(name)}`)
@@ -1532,10 +1617,12 @@
     if (!rows.length && !H) { toast('No results found for this contractor'); return; }
     // Older tenders from the history that are not in the recent list.
     const seen = new Set(rows.map((x) => x.r.nit));
-    for (const t of H?.recent || []) {
-      if (seen.has(t.nit)) continue;
-      rows.push({ r: { nit: t.nit, ref: t.ref, title: t.title, district: t.district, dept: t.dept, value: t.value, winner: t.winner, closed: t.closed },
-        mine: t.amount || t.rank ? { amount: t.amount, rank: t.rank, pct: t.pct } : null, won: !t.winner, date: Date.parse(t.closed) || 0, old: true });
+    // History rows: [nit, closed, ref, title, district, dept, value, rank, amount, pct, winner-if-not-them, bidders]
+    for (const t of H?.tenders || []) {
+      const [nit, closed, ref, title, district, dept, value, rank, amount, pct, winner, count] = t;
+      if (seen.has(nit)) continue;
+      rows.push({ r: { nit, ref, title, district, dept, value, winner, closed, count },
+        mine: amount || rank ? { amount, rank, pct } : null, won: !winner, date: Date.parse(closed) || 0, old: true });
     }
     rows.sort((a, b) => b.date - a.date);
     const display = H?.name || rows.find((x) => x.mine?.name)?.mine.name || rows[0]?.r.winner || name;
@@ -1615,22 +1702,25 @@
             <tbody>${stats.rivals.map((v) => `<tr><td><button type="button" class="linkish" data-contractor="${esc(v.name)}">${esc(splitName(v.name).firm)}</button></td><td class="n">${v.met}</td><td class="n">${v.ahead} of ${v.met}</td></tr>`).join('')}</tbody>
           </table></div></section>` : ''}
         </div>
-        <section class="panel"><h3>Tenders <span class="count">${fmtInt(rows.length)}</span></h3><div class="table-wrap"><table>
+        <section class="panel"><h3>Every tender they bid <span class="count">${fmtInt(rows.length)}</span></h3>
+          <p class="note" style="margin:0 0 10px">Tap a tender to see every bidder's amount and item-wise rates.</p><div class="table-wrap"><table>
           <thead><tr><th>Date</th><th>Tender</th><th>Result</th><th class="n">Their bid</th><th class="n">vs estimate</th></tr></thead>
-          <tbody>${rows.slice(0, 200).map((x) => `<tr${x.won ? ' class="l1"' : ''}>
+          <tbody>${rows.map((x, i) => `<tr${x.won ? ' class="l1"' : ''}${i >= 100 ? ' class="more-row" hidden' : ''}>
             <td>${x.date ? esc(shortDate.format(new Date(x.date))) + (x.old ? ` ${new Date(x.date).getFullYear()}` : '') : ''}</td>
-            <td>${R.byNit?.has(x.r.nit) ? `<button type="button" class="linkish item-name" data-award="${esc(x.r.nit)}">${esc(x.r.title)}</button>` : `<div class="item-name">${esc(x.r.title)}</div>`}<small>${esc([x.r.district, x.r.dept].filter(Boolean).join(' · '))}</small></td>
+            <td><button type="button" class="linkish item-name" data-bids="${esc(x.r.nit)}" data-month="${esc(String(x.r.closed || '').slice(0, 7))}">${esc(x.r.title)}</button><small>${esc([x.r.ref, x.r.district, x.r.dept].filter(Boolean).join(' · '))}</small></td>
             <td>${x.won ? '<b>Won</b>' : x.mine?.rank ? `L${x.mine.rank}` : ''}${!x.won && x.r.winner ? `<small>Winner: <button type="button" class="linkish" data-contractor="${esc(x.r.winner)}">${esc(splitName(x.r.winner).firm)}</button></small>` : ''}</td>
             <td class="n">${x.mine?.amount ? money(x.mine.amount) : ''}</td>
             <td class="n">${x.mine?.pct === null || x.mine?.pct === undefined ? '' : (x.mine.pct > 0 ? '+' : '') + x.mine.pct.toFixed(1) + '%'}</td>
           </tr>`).join('')}</tbody>
-        </table></div>${H ? '<p class="note">Their latest tenders since 2023 plus all recent results. For every bid they made, download the yearly Excel files in Past results and filter by their name.</p>' : ''}</section>
+        </table></div>${rows.length > 100 ? `<button class="btn ghost show-rows" type="button" id="cpMore">Show all ${fmtInt(rows.length)} tenders</button>` : ''}</section>
       </div>`;
     d.setAttribute('aria-hidden', 'false');
     d.classList.add('open');
     document.body.style.overflow = 'hidden';
     d.scrollTop = 0;
     d.querySelector('[data-close]').focus();
+    $('cpMore')?.addEventListener('click', (e) => { d.querySelectorAll('.cp tr.more-row').forEach((row) => { row.hidden = false; }); e.target.remove(); });
+    cpRows = rows;
     $('cpXlsx').addEventListener('click', () => downloadDoc({
       title: display, fileBase: `contractor-${safeFile(who.firm)}`,
       sections: [
@@ -2087,6 +2177,7 @@
     clearTimeout(qTimer);
     qTimer = setTimeout(() => {
       if (R.mode === 'results') { R.q = e.target.value; applyResults(); return; }
+      if (R.mode === 'bidders') { B.q = e.target.value; applyBidders(); return; }
       S.q = e.target.value; apply({ keepScroll: true });
     }, 140);
   });
@@ -2138,6 +2229,9 @@
   applyText(readJSON(TEXT_KEY, false));
   $('textBtn').addEventListener('click', () => { const big = !document.documentElement.classList.contains('big-text'); applyText(big); writeJSON(TEXT_KEY, big); toast(big ? 'Bigger text on' : 'Normal text size'); });
   $('rMore').addEventListener('click', moreResults);
+  for (const id of ['bDistrict', 'bSort', 'bMin']) $(id).addEventListener('change', applyBidders);
+  $('bMore').addEventListener('click', moreBidders);
+  $('biddersView').addEventListener('click', (e) => { const w = e.target.closest('[data-win]'); if (w) { e.preventDefault(); openContractor(w.dataset.win); } });
   $('rReset').addEventListener('click', () => {
     for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork', 'rPeriod', 'rValue', 'rBidderCount']) $(id).value = '';
     $('rSort').value = 'new'; R.q = ''; R.savedOnly = false; $('q').value = ''; applyResults();
@@ -2207,6 +2301,8 @@
     if (tdl) { const t = G.t; if (t) exportTender(t, tdl.dataset.tdl); return; }
     const cdl = e.target.closest('[data-dl]');
     if (cdl) { e.stopPropagation(); const t = S.byId.get(cdl.dataset.dl); if (t) exportTender(t, 'pdf'); return; }
+    const tb = e.target.closest('[data-bids]');
+    if (tb) { e.preventDefault(); openTenderBids(tb.dataset.bids, tb.dataset.month); return; }
     const aw = e.target.closest('#drawer [data-award]');
     if (aw) { e.preventDefault(); openAward(aw.dataset.award); return; }
     const bw = e.target.closest('#drawer [data-win]');

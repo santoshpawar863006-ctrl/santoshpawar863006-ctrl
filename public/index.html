@@ -15,8 +15,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=20260926o">
-<script src="/app.js?v=20260926r" defer></script>
+<link rel="stylesheet" href="/app.css?v=20260926p">
+<script src="/app.js?v=20260926s" defer></script>
 </head>
 <body>
 <header class="hero">
@@ -47,6 +47,7 @@
     <div class="modes" role="tablist" aria-label="Section">
       <button type="button" role="tab" data-mode="live" aria-selected="true">Live tenders</button>
       <button type="button" role="tab" data-mode="results" aria-selected="false">Past results</button>
+      <button type="button" role="tab" data-mode="bidders" aria-selected="false">Bidders</button>
     </div>
     <label class="search">
       <span class="sr-only">Search tenders</span>
@@ -162,7 +163,6 @@
     </div>
   </section>
   <section class="panel watch" id="rWatch" hidden></section>
-  <section class="panel leaders" id="rLeaders" hidden></section>
   <details class="panel charts" id="rCharts">
     <summary><h3>Charts &amp; trends for these results</h3><span class="note">Discount by month, districts, departments, busiest winners</span></summary>
     <div id="rChartsBody"></div>
@@ -172,6 +172,34 @@
   <div class="people" id="rPeople" hidden></div>
   <section class="rlist" id="rList"></section>
   <div class="more"><button class="btn" id="rMore" type="button" hidden>Show more results</button></div>
+</main>
+
+<main class="wrap" id="biddersView" hidden>
+  <section class="filters">
+    <div class="filter-row">
+      <div class="select"><select id="bDistrict" aria-label="District"><option value="">All districts</option></select></div>
+      <div class="select"><select id="bSort" aria-label="Sort">
+        <option value="wins">Most wins</option>
+        <option value="bids">Most bids</option>
+        <option value="rate">Best win rate</option>
+        <option value="value">Highest value won</option>
+        <option value="latest">Recently active</option>
+        <option value="name">Name A–Z</option>
+      </select></div>
+      <div class="select"><select id="bMin" aria-label="Minimum bids">
+        <option value="">Any number of bids</option>
+        <option value="5">5 or more bids</option>
+        <option value="10">10 or more bids</option>
+        <option value="50">50 or more bids</option>
+      </select></div>
+      <span class="spacer"></span>
+      <span id="bDownload"></span>
+    </div>
+  </section>
+  <section class="panel leaders" id="rLeaders" hidden></section>
+  <div class="results-head"><h2 id="bTitle">Loading bidders…</h2><p class="note" style="margin:0">Every works bidder since 2023. Type a name in the search box, then tap a bidder to see every tender they bid, and tap a tender to see all competitors and their item-wise rates.</p></div>
+  <section class="rlist" id="bList"></section>
+  <div class="more"><button class="btn" id="bMore" type="button" hidden>Show more bidders</button></div>
 </main>
 
 <footer class="foot">
