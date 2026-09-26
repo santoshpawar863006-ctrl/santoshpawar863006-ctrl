@@ -2,6 +2,11 @@ name: Collect KPPP Works History
 
 on:
   workflow_dispatch:
+    inputs:
+      focus:
+        description: "Catch-up: part number (0-3) whose pages all four jobs share. Leave empty for a normal run."
+        required: false
+        default: ""
   schedule:
     # Backup only; the scheduler starts it once a day.
     - cron: "10 22 * * *"
@@ -38,6 +43,7 @@ jobs:
       - name: Collect Part
         env:
           HISTORY_TIME_BUDGET: "18000"
+          HISTORY_FOCUS: ${{ github.event.inputs.focus }}
         run: python collect_history.py collect history part-${{ matrix.part }} ${{ matrix.part }} 4
       - uses: actions/upload-artifact@v4
         if: always()

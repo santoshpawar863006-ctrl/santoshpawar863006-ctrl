@@ -616,6 +616,11 @@ def collect(history, out, shard, shards):
     print(f"KPPP lists {pages} pages of awarded works ({int(time.monotonic() - started)}s)", flush=True)
     # Interleaved pages spread old and new tenders evenly over the parts.
     mine = list(range(shard, pages + 1, shards))
+    # Catch-up mode: every job works on one part's pages (a part that failed before), shared out.
+    focus = os.getenv("HISTORY_FOCUS", "").strip()
+    if focus.isdigit():
+        mine = list(range(int(focus), pages + 1, shards))[shard::shards]
+        print(f"Catch-up: sharing part {int(focus) + 1}'s pages over {shards} jobs", flush=True)
     print(f"Part {shard + 1}/{shards}: {len(mine)} of {pages} pages; {len(known)} already in history", flush=True)
     ok = failed = 0
     known_in_a_row, caught_up = 0, False
@@ -653,7 +658,8 @@ def collect(history, out, shard, shards):
             if n % 25 == 0 or n <= 3:
                 print(f"  {n}/{len(mine)} pages, {ok} new, {failed} failed ({int(time.monotonic() - started)}s)", flush=True)
     store.save()
-    stats.update(new=ok, failed=failed, finished=stats["pages_done"] == len(mine) or caught_up)
+    # A catch-up run covers only one part's pages, so it never marks the whole history complete.
+    stats.update(new=ok, failed=failed, finished=not focus.isdigit() and (stats["pages_done"] == len(mine) or caught_up))
     (out / "part.json").write_text(json.dumps(stats), encoding="utf-8")
     print(f"Part {shard + 1} done: {ok} new, {failed} failed, {stats['pages_done']}/{len(mine)} pages ({int(time.monotonic() - started)}s)")
 
