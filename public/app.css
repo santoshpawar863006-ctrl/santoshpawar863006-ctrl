@@ -288,6 +288,28 @@ td.win{color:var(--ok);font-weight:700}
 .win-sum small{color:var(--ink-2);font-size:12.5px}
 .win-sum .note{margin:6px 0 0}
 
+/* Tender page uses the whole screen: wider page, sticky side column, two columns of short panels,
+   full-width bill of quantities */
+.tender-page .wrap{max-width:1640px}
+.tp-grid{padding-bottom:16px}
+.tp-wide{display:flex;flex-direction:column;gap:16px;padding-bottom:60px}
+.tp-wide:empty{display:none}
+#tpBoqWrap:empty{display:none}
+.tp-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+.tp-pair>#tpSimilar[hidden]+.panel{grid-column:1/-1}
+#tpBoq .item-name{min-width:260px}
+@media (min-width:1001px){
+  .tp-side{position:sticky;top:72px;align-self:start;max-height:calc(100vh - 88px);overflow:auto;scrollbar-width:thin;padding-bottom:4px}
+}
+@media (min-width:1280px){
+  #tpFull{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+  #tpFull>.changes,#tpFull>.note,#tpFull>section:only-child{grid-column:1/-1}
+}
+@media (max-width:1000px){
+  .tp-pair{grid-template-columns:1fr}
+  #tpBoq .item-name{min-width:180px}
+}
+
 /* ---------- Contractor profile ---------- */
 .cp{display:flex;flex-direction:column;gap:16px;padding-top:22px;padding-bottom:60px}
 .cp-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
