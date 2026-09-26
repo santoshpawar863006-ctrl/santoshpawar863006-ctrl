@@ -10,6 +10,8 @@
   const RSAVED_KEY = 'tenderone_saved_results';
   const NOTES_KEY = 'tenderone_notes';
   const TEXT_KEY = 'tenderone_text_size';
+  const WATCH_KEY = 'tenderone_watch';
+  const COMPARE_KEY = 'tenderone_compare';
   const PAGE = 30;
   const DAY = 86400000;
 
@@ -58,7 +60,8 @@
     cat: 'ALL', soon: 0, savedOnly: false, forMe: false, q: '',
     profile: readJSON(PROFILE_KEY, null),
     saved: new Set(readJSON(SAVED_KEY, [])),
-    byId: new Map()
+    byId: new Map(),
+    compare: readJSON(COMPARE_KEY, [])
   };
 
   function readJSON(key, fallback) {
@@ -296,6 +299,7 @@
 
   // ---------- Cards ----------
   const pinIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>';
+  const cmpIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M8 3v18M16 3v18M3 8h5M16 16h5"/></svg>';
   const dlIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>';
   const heartIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z"/></svg>';
 
@@ -319,6 +323,7 @@
       <div class="figures">${fig('Value', money(t.value))}${fig('EMD', money(t.emd))}${fig('Fee', money(t.fee))}</div>
       <button class="save ${saved ? 'on' : ''}" type="button" data-save="${esc(t.id)}" aria-label="${saved ? 'Remove from saved' : 'Save tender'}" aria-pressed="${saved}">${heartIcon}</button>
       <button class="dlb" type="button" data-dl="${esc(t.id)}" aria-label="Download tender details as PDF" title="Download PDF">${dlIcon}</button>
+      <button class="cmpb ${S.compare.includes(t.id) ? 'on' : ''}" type="button" data-cmp="${esc(t.id)}" aria-pressed="${S.compare.includes(t.id)}" aria-label="Add to compare" title="Compare">${cmpIcon}</button>
       ${noteOf('t:' + t.id) ? '<span class="note-flag" title="You have a note on this tender">📝 Note</span>' : ''}
     </article>`;
   }
@@ -385,6 +390,7 @@
           <button class="btn ghost" type="button" data-close>${icon.back} Back to tenders</button>
           <span class="spacer"></span>
           <button class="btn" type="button" data-copy="${esc(t.ref)}">Copy tender no.</button>
+          <button class="btn ${S.compare.includes(t.id) ? 'on' : ''}" type="button" data-cmp="${esc(t.id)}" aria-pressed="${S.compare.includes(t.id)}">${cmpIcon} Compare</button>
           <button class="btn" type="button" data-tdl="xlsx" title="Download this tender as Excel">${dlIcon} Excel</button>
           <button class="btn" type="button" data-tdl="pdf" title="Download this tender as PDF">${dlIcon} PDF</button>
           <button class="btn ${saved ? 'on' : ''}" type="button" data-save="${esc(t.id)}" aria-pressed="${saved}">${heartIcon}${saved ? ' Saved' : ' Save'}</button>
@@ -824,7 +830,7 @@
     d.classList.remove('open');
     d.setAttribute('aria-hidden', 'true');
     document.body.style.overflow = '';
-    if (!fromHistory && /^#[tca]=/.test(location.hash)) history.back();
+    if (!fromHistory && (/^#[tca]=/.test(location.hash) || location.hash === '#compare')) history.back();
     lastFocus?.focus?.();
   }
 
@@ -1066,6 +1072,8 @@
     $('rList').innerHTML = '';
     moreResults();
     while (R.shown < Math.min(keep, R.filtered.length)) moreResults();
+    renderWatch();
+    if ($('rCharts').open) renderCharts();
   }
 
   // "NAME (1)( FIRM NAME )" → firm and person, the way KPPP writes bidders.
@@ -1076,7 +1084,7 @@
   }
   function bidderName(n) {
     const { firm, person } = splitName(n);
-    return `<button type="button" class="linkish" data-win="${esc(n)}">${esc(firm)}</button>${person ? `<small class="who">${esc(person)}</small>` : ''}`;
+    return `${isWatched(n) ? '<span class="eye" title="You watch this contractor">👁</span> ' : ''}<button type="button" class="linkish" data-win="${esc(n)}">${esc(firm)}</button>${person ? `<small class="who">${esc(person)}</small>` : ''}`;
   }
   const signed = (p, digits = 2) => (p === null || p === undefined ? '' : `${p > 0 ? '+' : ''}${p.toFixed(digits)}%`);
 
@@ -1113,7 +1121,7 @@
         <div class="rside">
           <button class="save rfav ${R.saved.has(r.nit) ? 'on' : ''}" type="button" data-rsave="${esc(r.nit)}" aria-pressed="${R.saved.has(r.nit)}" aria-label="Save this result">${heartIcon}</button>
           <span class="rlabel">Winner</span>
-          <strong class="rwinner">${esc(r.winner || 'Not published')}</strong>
+          <strong class="rwinner">${r.winner && isWatched(r.winner) ? '<span class="eye" title="You watch this contractor">👁</span> ' : ''}${esc(r.winner || 'Not published')}</strong>
           <div class="rstats">
             ${p !== null ? `<span class="pct ${tone}">${esc(pctText(p))}</span>` : ''}
             ${r.bidders?.length ? `<span class="badge soft">${r.bidders.length} bidder${r.bidders.length === 1 ? '' : 's'}</span>` : ''}
@@ -1188,8 +1196,9 @@
       <div class="kpis" style="margin-top:12px">
         <div class="kpi"><span>Typical winning bid</span><strong>${Math.abs(sim.median).toFixed(1)}% ${sim.median <= 0 ? 'below' : 'above'}</strong><small>the estimate (median L1)</small></div>
         <div class="kpi"><span>Average bidders</span><strong>${sim.bidders === null ? '—' : sim.bidders.toFixed(1)}</strong><small>per tender</small></div>
-        <div class="kpi"><span>Most wins</span><strong style="font-size:14px">${sim.top[0] ? `<button type="button" class="linkish" data-contractor="${esc(sim.top[0][0])}">${esc(sim.top[0][0])}</button>` : '—'}</strong><small>${sim.top[0] ? `${sim.top[0][1]} tenders` : ''}</small></div>
+        <div class="kpi"><span>Most wins</span><strong style="font-size:14px">${sim.top[0] ? `<button type="button" class="linkish" data-contractor="${esc(sim.top[0][0])}">${esc(splitName(sim.top[0][0]).firm)}</button>` : '—'}</strong><small>${sim.top[0] ? `${sim.top[0][1]} tenders` : ''}</small></div>
       </div>
+      ${sim.top.length ? `<div class="usual"><span>Who usually wins here:</span>${sim.top.filter(([n]) => /[a-z]{2}/i.test(n)).slice(0, 3).map(([n, c]) => `<button type="button" class="chip${isWatched(n) ? ' watched' : ''}" data-contractor="${esc(n)}">${isWatched(n) ? '👁 ' : ''}${esc(splitName(n).firm)} <b>${c}</b></button>`).join('')}</div>` : ''}
       ${num(t.value) ? `<p class="note">At that rate the winning bid for this tender would be about <b>${money(t.value * (1 + sim.median / 100), { full: true })}</b>.</p>` : ''}
       <button class="btn" type="button" id="seeSimilar">See these results</button>`;
     $('seeSimilar').addEventListener('click', () => {
@@ -1450,6 +1459,7 @@
       <div class="tp-bar"><div class="wrap tp-bar-in">
         <button class="btn ghost" type="button" data-close>${icon.back} Back</button>
         <span class="spacer"></span>
+        <button class="btn ${isWatched(display) ? 'on' : ''}" type="button" data-follow="${esc(display)}" aria-pressed="${isWatched(display)}">👁 ${isWatched(display) ? 'Watching' : 'Watch'}</button>
         <button class="btn" type="button" data-copy="${esc(display)}">Copy name</button>
       </div></div>
       <header class="tp-hero"><div class="wrap">
@@ -1683,6 +1693,189 @@
     }, 'xlsx');
   }
 
+  // ---------- Watch competitors ----------
+  let watch = readJSON(WATCH_KEY, []); // [{ key, name, seen }]
+  const isWatched = (n) => Boolean(n) && watch.some((w) => w.key === nameKey(n));
+  function toggleWatch(name) {
+    const key = nameKey(name);
+    const on = !watch.some((w) => w.key === key);
+    watch = on ? [...watch, { key, name, seen: Date.now() }] : watch.filter((w) => w.key !== key);
+    writeJSON(WATCH_KEY, watch);
+    document.querySelectorAll('[data-follow]').forEach((b) => {
+      if (nameKey(b.dataset.follow) !== key) return;
+      b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); b.textContent = on ? '👁 Watching' : '👁 Watch';
+    });
+    toast(on ? `Watching ${splitName(name).firm}` : 'Stopped watching');
+    if (R.all) applyResults({ keepPage: true });
+  }
+  function renderWatch() {
+    const box = $('rWatch');
+    if (!box) return;
+    if (!watch.length) { box.hidden = true; return; }
+    const stats = watch.map((w) => {
+      let bids = 0, wins = 0, fresh = 0, last = 0;
+      for (const r of R.all || []) {
+        const bid = (r.bidders || []).find((b) => nameKey(b.name) === w.key);
+        const won = nameKey(r.winner) === w.key || bid?.rank === 1;
+        if (!bid && !won) continue;
+        bids++; if (won) { wins++; last = Math.max(last, r._award); }
+        if (r._award > (w.seen || 0)) fresh++;
+      }
+      return { ...w, bids, wins, fresh, last };
+    });
+    box.hidden = false;
+    box.innerHTML = `<h3>Contractors I watch <span class="count">${watch.length}</span></h3>
+      <div class="watch-list">${stats.map((w) => `<button type="button" class="watch-card" data-win="${esc(w.name)}">
+        <b>${esc(splitName(w.name).firm)}</b>
+        <span>${fmtInt(w.wins)} won · ${fmtInt(w.bids)} bids${w.last ? ` · last win ${esc(shortDate.format(new Date(w.last)))}` : ''}</span>
+        ${w.fresh ? `<em>${fmtInt(w.fresh)} new since you started watching</em>` : ''}
+      </button>`).join('')}</div>
+      <p class="note">Open a contractor to see all their bids. Tap “👁 Watch” on any contractor page to add or remove.</p>`;
+  }
+
+  // ---------- Compare tenders ----------
+  function toggleCompare(id) {
+    const on = !S.compare.includes(id);
+    if (on && S.compare.length >= 4) { toast('You can compare up to 4 tenders'); return; }
+    S.compare = on ? [...S.compare, id] : S.compare.filter((x) => x !== id);
+    writeJSON(COMPARE_KEY, S.compare);
+    document.querySelectorAll(`[data-cmp="${CSS.escape(id)}"]`).forEach((b) => { b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+    updateCompareTray();
+    toast(on ? `Added to compare (${S.compare.length})` : 'Removed from compare');
+  }
+  function updateCompareTray() {
+    const tray = $('cmpTray');
+    S.compare = S.compare.filter((id) => S.byId.has(id));
+    tray.hidden = !S.compare.length;
+    tray.innerHTML = `<span><b>${S.compare.length}</b> to compare</span>
+      <button class="btn primary" type="button" id="cmpGo"${S.compare.length < 2 ? ' disabled title="Pick at least 2 tenders"' : ''}>Compare now</button>
+      <button class="btn ghost" type="button" id="cmpClear">Clear</button>`;
+    $('cmpGo').addEventListener('click', openCompare);
+    $('cmpClear').addEventListener('click', () => {
+      S.compare.forEach((id) => document.querySelectorAll(`[data-cmp="${CSS.escape(id)}"]`).forEach((b) => { b.classList.remove('on'); b.setAttribute('aria-pressed', 'false'); }));
+      S.compare = []; writeJSON(COMPARE_KEY, []); updateCompareTray();
+    });
+  }
+  function simGroup(t, groups) {
+    if (!groups) return null;
+    let g = groups[`d|${t.dept || ''}|${t.work || ''}`];
+    const byDistrict = t.district ? groups[`x|${t.district}|${t.work || ''}`] : null;
+    if ((!g || g.n < 5) && byDistrict && byDistrict.n > (g?.n || 0)) g = byDistrict;
+    return g || null;
+  }
+  async function openCompare() {
+    const list = S.compare.map((id) => S.byId.get(id)).filter(Boolean);
+    if (list.length < 2) { toast('Pick at least 2 tenders to compare'); return; }
+    const groups = await loadSimilar();
+    lastFocus = document.activeElement;
+    const rows = [
+      ['Department', (t) => esc(t.dept || '')],
+      ['District', (t) => esc(t.district || '—')],
+      ['Type of work', (t) => esc(t.work || '—')],
+      ['Who can bid', (t) => esc(t.access || '—')],
+      ['Tender value', (t) => money(t.value, { full: true }) || '—', (t) => num(t.value)],
+      ['EMD', (t) => money(t.emd, { full: true }) || '—', (t) => -(num(t.emd) || Infinity)],
+      ['Tender fee', (t) => money(t.fee, { full: true }) || '—'],
+      ['Closes', (t) => (t._close ? `${esc(dateFmt.format(new Date(t._close)))}<small>${esc(timeLeft(t._close)?.label || '')}</small>` : '—')],
+      ['Typical winning bid', (t) => { const g = simGroup(t, groups); return g ? `${esc(pctText(g.q[1]))}<small>${fmtInt(g.n)} similar tenders</small>` : '—'; }],
+      ['Suggested bid', (t) => { const g = simGroup(t, groups); return g && num(t.value) ? money(t.value * (1 + g.q[1] / 100), { full: true }) : '—'; }],
+      ['Usual competition', (t) => { const g = simGroup(t, groups); return g?.bidders ? `${g.bidders} bidders on average` : '—'; }, (t) => -(simGroup(t, groups)?.bidders || Infinity)],
+      ['Usual winner', (t) => { const g = simGroup(t, groups); return g?.top?.[0] ? `<button type="button" class="linkish" data-contractor="${esc(g.top[0][0])}">${esc(splitName(g.top[0][0]).firm)}</button><small>${g.top[0][1]} wins</small>` : '—'; }],
+      ['My notes', (t) => esc(noteOf('t:' + t.id) || '—')]
+    ];
+    const d = $('drawer');
+    d.innerHTML = `
+      <div class="tp-bar"><div class="wrap tp-bar-in">
+        <button class="btn ghost" type="button" data-close>${icon.back} Back</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" id="cmpXlsx">${dlIcon} Excel</button>
+      </div></div>
+      <header class="tp-hero"><div class="wrap">
+        <div class="row"><span class="badge soft">Compare tenders</span></div>
+        <h2 id="dTitle">${list.length} tenders side by side</h2>
+        <p class="tp-sub">Green marks the better value in a row (bigger value, lower EMD, fewer competitors).</p>
+      </div></header>
+      <div class="wrap cp">
+        <section class="panel"><div class="table-wrap"><table class="cmp-table">
+          <thead><tr><th></th>${list.map((t) => `<th><button type="button" class="linkish" data-open="${esc(t.id)}">${esc(t.title)}</button><small>${esc(t.ref)}</small>
+            <button type="button" class="btn ghost small" data-cmp="${esc(t.id)}" aria-pressed="true">Remove</button></th>`).join('')}</tr></thead>
+          <tbody>${rows.map(([label, cell, score]) => {
+            const scores = score ? list.map(score) : [];
+            const best = scores.length ? Math.max(...scores.filter((x) => Number.isFinite(x))) : null;
+            return `<tr><th>${esc(label)}</th>${list.map((t, i) => `<td${best !== null && Number.isFinite(best) && scores[i] === best ? ' class="best"' : ''}>${cell(t)}</td>`).join('')}</tr>`;
+          }).join('')}</tbody>
+        </table></div></section>
+      </div>`;
+    d.setAttribute('aria-hidden', 'false');
+    d.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    d.scrollTop = 0;
+    d.querySelector('[data-close]').focus();
+    d.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openTender(b.dataset.open)));
+    $('cmpXlsx').addEventListener('click', () => {
+      const plain = (html) => { const el = document.createElement('div'); el.innerHTML = html.replace(/<small>/g, ' · '); return el.textContent.trim(); };
+      downloadDoc({ title: 'Compare tenders', fileBase: `compare-${new Date().toISOString().slice(0, 10)}`, sections: [{
+        heading: 'Compare', head: ['', ...list.map((t) => t.ref)],
+        rows: [['Work', ...list.map((t) => t.title)], ...rows.map(([label, cell]) => [label, ...list.map((t) => plain(cell(t)))])],
+        widths: [22, ...list.map(() => 45)]
+      }] }, 'xlsx');
+    });
+    if (location.hash !== '#compare') history.pushState({ compare: true }, '', '#compare');
+  }
+
+  // ---------- Charts for the filtered past results ----------
+  function renderCharts() {
+    const box = $('rChartsBody');
+    const list = R.filtered;
+    if (!list.length) { box.innerHTML = '<p class="muted-p">No results to chart.</p>'; return; }
+    const byMonth = new Map();
+    for (const r of list) {
+      const p = winPct(r);
+      if (!r._award) continue;
+      const m = new Date(r._award + 5.5 * 3600e3).toISOString().slice(0, 7);
+      const v = byMonth.get(m) || { pcts: [], n: 0 };
+      v.n++; if (p !== null && p > -80 && p < 80) v.pcts.push(p);
+      byMonth.set(m, v);
+    }
+    const months = [...byMonth.keys()].sort().slice(-18);
+    const series = months.map((m) => ({ m, n: byMonth.get(m).n, med: median(byMonth.get(m).pcts) }));
+    const maxBelow = Math.max(5, ...series.map((x) => (x.med !== null ? -x.med : 0)));
+    const W = 640, H = 180, pad = 26, bw = (W - pad * 2) / Math.max(series.length, 1);
+    const monthName = (m) => new Date(m + '-01T00:00:00').toLocaleString('en-IN', { month: 'short' }) + (m.endsWith('-01') ? ' ' + m.slice(2, 4) : '');
+    const trend = series.length ? `<figure class="chart"><figcaption>Winning bid, % below estimate, by month (median L1)</figcaption>
+      <svg viewBox="0 0 ${W} ${H + 24}" role="img" aria-label="Median winning discount by month">
+        <line x1="${pad}" x2="${W - pad}" y1="${H}" y2="${H}" class="axis"/>
+        ${[0.5, 1].map((f) => `<line x1="${pad}" x2="${W - pad}" y1="${H - (H - 20) * f}" y2="${H - (H - 20) * f}" class="grid"/><text x="${pad - 4}" y="${H - (H - 20) * f + 4}" class="tick" text-anchor="end">${Math.round(maxBelow * f)}%</text>`).join('')}
+        ${series.map((x, i) => {
+          const v = x.med !== null ? Math.max(0, -x.med) : 0;
+          const h = (H - 20) * v / maxBelow;
+          const cx = pad + i * bw;
+          return `<g class="col"><rect class="hit" x="${cx}" y="0" width="${bw}" height="${H + 24}"/>
+            <rect class="bar" x="${cx + bw * 0.18}" y="${H - h}" width="${bw * 0.64}" height="${Math.max(h, 1)}" rx="4"/>
+            ${i % Math.ceil(series.length / 9) === 0 || i === series.length - 1 ? `<text x="${cx + bw / 2}" y="${H + 16}" class="tick" text-anchor="middle">${esc(monthName(x.m))}</text>` : ''}
+            <title>${esc(monthName(x.m))} ${x.m.slice(0, 4)}: ${x.med === null ? 'no bid data' : pctText(x.med)} · ${fmtInt(x.n)} tenders</title></g>`;
+        }).join('')}
+      </svg></figure>` : '';
+    const groupBy = (key, min) => {
+      const m = new Map();
+      for (const r of list) { const k = r[key]; if (!k) continue; const v = m.get(k) || []; const p = winPct(r); if (p !== null && p > -80 && p < 80) v.push(p); m.set(k, v); }
+      return [...m.entries()].filter(([, v]) => v.length >= min).map(([k, v]) => [k, median(v), v.length]);
+    };
+    const deep = groupBy('district', 5).sort((a, b) => a[1] - b[1]).slice(0, 10);
+    const deepMax = Math.max(1, ...deep.map((x) => -x[1]));
+    const depts = countBy(list, 'dept').slice(0, 8);
+    const wins = new Map();
+    for (const r of list) if (r.winner && /[a-z]{2}/i.test(r.winner)) { const k = nameKey(r.winner); const v = wins.get(k) || { name: r.winner, n: 0 }; v.n++; wins.set(k, v); }
+    const top = [...wins.values()].sort((a, b) => b.n - a.n).slice(0, 10);
+    const barList = (items, max) => `<div class="bars">${items.map(([label, val, text, extra]) => `<div class="bar" title="${esc(label)}: ${esc(text)}"><span>${extra || esc(label)}</span><i style="--w:${Math.max(3, Math.round(val / max * 100))}%"></i><b>${esc(text)}</b></div>`).join('')}</div>`;
+    box.innerHTML = `${trend}
+      <div class="cp-grid">
+        ${deep.length ? `<section><h4>Districts with the biggest discounts</h4><p class="note">Median winning bid below estimate · districts with 5+ tenders</p>${barList(deep.map(([k, v, n]) => [k, Math.max(0, -v), `${Math.abs(v).toFixed(1)}% · ${n}`]), deepMax)}</section>` : ''}
+        ${depts.length ? `<section><h4>Most tenders by department</h4><p class="note">Number of awarded tenders</p>${barList(depts.map(([k, n]) => [k, n, fmtInt(n)]), depts[0][1])}</section>` : ''}
+        ${top.length ? `<section><h4>Busiest winners</h4><p class="note">Tenders won · tap a name for their profile</p>${barList(top.map((w) => [w.name, w.n, fmtInt(w.n), `<button type="button" class="linkish" data-win="${esc(w.name)}">${isWatched(w.name) ? '👁 ' : ''}${esc(splitName(w.name).firm)}</button>`]), top[0].n)}</section>` : ''}
+      </div>`;
+  }
+
   // ---------- Export ----------
   function exportCsv() {
     const rows = [['Tender number', 'Category', 'Title', 'Department', 'Office', 'District', 'Tender value', 'EMD', 'Fee', 'Published', 'Closing', 'Who can bid', 'Work category']];
@@ -1794,6 +1987,7 @@
   document.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
   for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork', 'rSort', 'rPeriod', 'rValue', 'rBidderCount']) $(id).addEventListener('change', () => applyResults());
   $('rSavedBtn').addEventListener('click', () => { R.savedOnly = !R.savedOnly; applyResults(); });
+  $('rCharts').addEventListener('toggle', () => { if ($('rCharts').open && R.all) renderCharts(); });
   $('rExport').addEventListener('click', () => { if (R.filtered.length) exportResults(); else toast('No results to export'); });
   $('rSavedCount').textContent = R.saved.size;
   // Bigger text for easier reading, remembered on this device.
@@ -1834,6 +2028,10 @@
     const copy = e.target.closest('[data-copy]');
     if (copy) { navigator.clipboard?.writeText(copy.dataset.copy).then(() => toast('Tender number copied')); return; }
     if (e.target.closest('#drawer [data-close]')) { closeDrawer(); return; }
+    const fw = e.target.closest('[data-follow]');
+    if (fw) { e.preventDefault(); toggleWatch(fw.dataset.follow); return; }
+    const cm = e.target.closest('[data-cmp]');
+    if (cm) { e.preventDefault(); e.stopPropagation(); toggleCompare(cm.dataset.cmp); if (location.hash === '#compare' && S.compare.length >= 2) openCompare(); else if (location.hash === '#compare') closeDrawer(); return; }
     const rs = e.target.closest('[data-rsave]');
     if (rs) { e.preventDefault(); e.stopPropagation(); toggleResultSave(rs.dataset.rsave); return; }
     const rdl = e.target.closest('[data-rdl]');
@@ -1883,6 +2081,7 @@
     openAward(deepAward[1]);
   }
   load().then(() => {
+    updateCompareTray();
     // Get past results ready in the background so the "Past results" tab opens instantly.
     const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
     idle(() => loadResults().catch(() => {}));
