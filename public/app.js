@@ -114,6 +114,7 @@
   async function load() {
     // Show the last copy instantly on repeat visits, then swap in fresh data.
     const network = fetch(DATA_URL, { cache: 'no-cache' });
+    network.catch(() => {}); // handled below; avoids an "unhandled" warning when offline
     const cached = await readCache();
     if (cached?.tenders?.length) ingest(cached);
     try {
@@ -985,6 +986,7 @@
       R.loading = (async () => {
         const network = fetch(RESULTS_URL, { cache: 'no-cache' })
           .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))));
+        network.catch(() => {}); // handled below
         const cached = await readCache(RESULTS_URL);
         const refresh = network.then((text) => {
           const fresh = JSON.parse(text);
@@ -2074,6 +2076,29 @@
   $('chips').addEventListener('click', (e) => { const b = e.target.closest('[data-clear]'); if (b) clearFilter(b.dataset.clear); });
   $('statusBtn').addEventListener('click', showStatus);
   $('statusTopBtn').addEventListener('click', showStatus);
+
+  // ---------- Install as an app ----------
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let installPrompt = null;
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; if (!standalone) $('installBtn').hidden = false; });
+  window.addEventListener('appinstalled', () => { $('installBtn').hidden = true; toast('TenderOne installed — open it from your home screen'); });
+  if (!standalone && isIOS) $('installBtn').hidden = false;
+  $('installBtn').addEventListener('click', async () => {
+    if (installPrompt) {
+      installPrompt.prompt();
+      const { outcome } = await installPrompt.userChoice.catch(() => ({}));
+      if (outcome === 'accepted') $('installBtn').hidden = true;
+      installPrompt = null;
+      return;
+    }
+    $('installSteps').innerHTML = isIOS
+      ? '<ol><li>Open this website in <b>Safari</b>.</li><li>Tap the <b>Share</b> button (square with an arrow ↑) at the bottom.</li><li>Tap <b>Add to Home Screen</b>, then <b>Add</b>.</li></ol><p class="note">TenderOne then opens from its own icon, full screen, like an app.</p>'
+      : '<ol><li>Open this website in <b>Chrome</b>.</li><li>Tap the <b>⋮</b> menu at the top right.</li><li>Tap <b>Install app</b> (or <b>Add to Home screen</b>), then <b>Install</b>.</li></ol><p class="note">TenderOne then opens from its own icon, full screen, like an app.</p>';
+    $('installDialog').showModal();
+  });
+  $('installDialog').addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === e.currentTarget) $('installDialog').close(); });
   $('statusDialog').addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === e.currentTarget) $('statusDialog').close(); });
   $('themeBtn').addEventListener('click', () => {
     const dark = document.documentElement.dataset.theme
