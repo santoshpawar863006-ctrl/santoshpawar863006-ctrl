@@ -10,8 +10,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=20260926d">
-<script src="/app.js?v=20260926d" defer></script>
+<link rel="stylesheet" href="/app.css?v=20260926e">
+<script src="/app.js?v=20260926e" defer></script>
 </head>
 <body>
 <header class="hero">
@@ -22,6 +22,7 @@
         <span>TenderOne<small>Karnataka tender desk</small></span>
       </a>
       <div class="topbar-inner">
+        <button class="icon-btn text-btn" id="textBtn" type="button" title="Bigger text" aria-label="Bigger text" aria-pressed="false">A<span>A</span></button>
         <button class="icon-btn" id="themeBtn" type="button" title="Switch light / dark" aria-label="Switch light or dark theme">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
         </button>
@@ -127,9 +128,26 @@
       <div class="select"><select id="rDistrict" aria-label="District"><option value="">All districts</option></select></div>
       <div class="select"><select id="rDept" aria-label="Department"><option value="">All departments</option></select></div>
       <div class="select"><select id="rWork" aria-label="Type of work"><option value="">All types of work</option></select></div>
+      <div class="select"><select id="rPeriod" aria-label="Awarded when"><option value="">Awarded any time</option><option value="3">Last 3 months</option><option value="6">Last 6 months</option><option value="12">Last 12 months</option></select></div>
+      <div class="select"><select id="rValue" aria-label="Estimate">
+        <option value="">Any value</option>
+        <option value="0-1000000">Up to ₹10 lakh</option>
+        <option value="1000000-10000000">₹10 lakh – ₹1 crore</option>
+        <option value="10000000-50000000">₹1 – 5 crore</option>
+        <option value="50000000-">Above ₹5 crore</option>
+      </select></div>
+      <div class="select"><select id="rBidderCount" aria-label="Number of bidders"><option value="">Any number of bidders</option><option value="1">Only 1 bidder</option><option value="2">2 or more bidders</option><option value="3">3 or more bidders</option><option value="5">5 or more bidders</option></select></div>
       <div class="select"><select id="rSort" aria-label="Sort"><option value="new">Recently awarded</option><option value="discount">Biggest discount</option><option value="value">Highest value</option><option value="bidders">Most bidders</option></select></div>
+      <button class="btn" id="rSavedBtn" type="button" aria-pressed="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z"/></svg>
+        Saved <span id="rSavedCount">0</span>
+      </button>
       <span class="spacer"></span>
       <button class="btn ghost" id="rReset" type="button">Reset</button>
+      <button class="btn" id="rExport" type="button" title="Download the filtered results as an Excel file">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>
+        Export
+      </button>
     </div>
   </section>
   <section class="panel downloads" id="rDownloads" hidden></section>

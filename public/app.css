@@ -193,6 +193,25 @@ td.my input:focus{outline:2px solid var(--brand);border-color:transparent}
 .people .chip b{color:var(--muted);margin-left:4px}
 .hit{font-size:12.5px;color:var(--ink-2);background:var(--warn-soft);border-radius:6px;padding:3px 8px;align-self:flex-start}
 
+.dlb{position:absolute;top:50px;right:12px;width:32px;height:32px;border-radius:9px;border:1px solid var(--line);background:var(--surface);display:grid;place-items:center;color:var(--muted);transition:color .15s,transform .15s}
+.dlb:hover{color:var(--brand);transform:scale(1.06)}
+.grid.list .dlb{top:50%;right:52px;transform:translateY(-50%)}
+.grid.list .note-flag{display:none}
+.note-flag{align-self:flex-start;font-size:11.5px;font-weight:700;color:var(--warn);background:var(--warn-soft);border-radius:6px;padding:2px 7px}
+.rside{position:relative;padding-right:42px}
+.rfav{top:0;right:0}
+.row-actions{display:flex;flex-wrap:wrap;gap:8px}
+.note-line{margin:0;font-size:13.5px;background:var(--warn-soft);border-radius:8px;padding:8px 10px}
+.notes .note-box{width:100%;min-height:76px;resize:vertical;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit;font-size:14px;background:var(--surface);color:var(--ink)}
+.notes .note-box:focus{outline:2px solid var(--brand);border-color:transparent}
+.note-saved{color:var(--ok);font-size:12px;font-weight:700;min-height:14px;display:block;margin-top:4px}
+.text-btn{display:inline-flex;align-items:baseline;justify-content:center;gap:1px;font-weight:800;font-size:12px;letter-spacing:-.02em;padding-top:6px}
+.text-btn span{font-size:17px}
+.text-btn[aria-pressed="true"]{background:rgba(255,255,255,.28)}
+html.big-text body{zoom:1.15}
+#rSavedBtn.on{color:#e11d48;border-color:color-mix(in srgb,#e11d48 35%,var(--line))}
+#rSavedBtn.on svg{fill:currentColor}
+
 /* ---------- Contractor profile ---------- */
 .cp{display:flex;flex-direction:column;gap:16px;padding-top:22px;padding-bottom:60px}
 .cp-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
@@ -239,7 +258,7 @@ td.my input:focus{outline:2px solid var(--brand);border-color:transparent}
 .seg button{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px;border:0;border-radius:7px;background:none;font-size:13px;font-weight:700;color:var(--muted)}
 .seg button[aria-pressed="true"]{background:var(--brand-soft);color:var(--brand)}
 .grid.list{grid-template-columns:1fr;gap:8px}
-.grid.list .card{display:grid;grid-template-columns:minmax(0,1fr) 340px;grid-template-areas:"top fig" "title fig" "meta fig";gap:4px 18px;padding:12px 56px 12px 16px;contain-intrinsic-size:auto 96px}
+.grid.list .card{display:grid;grid-template-columns:minmax(0,1fr) 340px;grid-template-areas:"top fig" "title fig" "meta fig";gap:4px 18px;padding:12px 96px 12px 16px;contain-intrinsic-size:auto 96px}
 .grid.list .card-top{grid-area:top;padding-right:0}
 .grid.list .card h3{grid-area:title;-webkit-line-clamp:1;font-size:15px}
 .grid.list .card .meta{grid-area:meta}
@@ -259,7 +278,7 @@ td.my input:focus{outline:2px solid var(--brand);border-color:transparent}
 .due{margin-left:auto;display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:6px;font-size:11.5px;font-weight:800;background:var(--surface-2);color:var(--ink-2);white-space:nowrap}
 .due.hot{background:var(--danger-soft);color:var(--danger)}
 .due.warm{background:var(--warn-soft);color:var(--warn)}
-.card h3{margin:0;font-size:15.5px;line-height:1.4;font-weight:700;letter-spacing:-.01em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.card h3{margin:0;font-size:15.5px;line-height:1.4;font-weight:700;letter-spacing:-.01em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;padding-right:34px}
 .card .meta{font-size:13px;color:var(--muted);display:flex;gap:6px;align-items:center;min-width:0}
 .card .meta span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card .meta svg{flex:none}
@@ -426,6 +445,7 @@ dialog.wide{width:min(720px,calc(100% - 24px));max-height:calc(100vh - 40px)}
   .grid.list .card h3{-webkit-line-clamp:2}
   .grid.list .figures{border-left:0;padding:6px 0 0}
   .grid.list .save{top:12px;transform:none}
+  .grid.list .dlb{top:50px;right:12px;transform:none}
   .seg button{padding:0 8px}
   .wrap{padding:0 16px}
   .hero{padding-bottom:78px}

@@ -7,6 +7,9 @@
   const THEME_KEY = 'tenderone_theme';
   const VIEW_KEY = 'tenderone_view';
   const PROFILE_KEY = 'tenderone_profile';
+  const RSAVED_KEY = 'tenderone_saved_results';
+  const NOTES_KEY = 'tenderone_notes';
+  const TEXT_KEY = 'tenderone_text_size';
   const PAGE = 30;
   const DAY = 86400000;
 
@@ -293,6 +296,7 @@
 
   // ---------- Cards ----------
   const pinIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>';
+  const dlIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>';
   const heartIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z"/></svg>';
 
   function fig(label, value) {
@@ -314,6 +318,8 @@
       <div class="meta">${pinIcon}<span>${esc(where)}</span></div>
       <div class="figures">${fig('Value', money(t.value))}${fig('EMD', money(t.emd))}${fig('Fee', money(t.fee))}</div>
       <button class="save ${saved ? 'on' : ''}" type="button" data-save="${esc(t.id)}" aria-label="${saved ? 'Remove from saved' : 'Save tender'}" aria-pressed="${saved}">${heartIcon}</button>
+      <button class="dlb" type="button" data-dl="${esc(t.id)}" aria-label="Download tender details as PDF" title="Download PDF">${dlIcon}</button>
+      ${noteOf('t:' + t.id) ? '<span class="note-flag" title="You have a note on this tender">📝 Note</span>' : ''}
     </article>`;
   }
 
@@ -379,6 +385,8 @@
           <button class="btn ghost" type="button" data-close>${icon.back} Back to tenders</button>
           <span class="spacer"></span>
           <button class="btn" type="button" data-copy="${esc(t.ref)}">Copy tender no.</button>
+          <button class="btn" type="button" data-tdl="xlsx" title="Download this tender as Excel">${dlIcon} Excel</button>
+          <button class="btn" type="button" data-tdl="pdf" title="Download this tender as PDF">${dlIcon} PDF</button>
           <button class="btn ${saved ? 'on' : ''}" type="button" data-save="${esc(t.id)}" aria-pressed="${saved}">${heartIcon}${saved ? ' Saved' : ' Save'}</button>
         </div>
       </div>
@@ -410,6 +418,7 @@
             <dt>Bid submission ends</dt><dd>${esc(closeText)}</dd>
           </dl></section>
           <section class="panel" id="tpContact" hidden></section>
+          ${notePanel('t:' + t.id)}
           <div class="actions col">
             <a class="btn primary" href="https://kppp.karnataka.gov.in/" target="_blank" rel="noopener">Bid on KPPP portal ↗</a>
             <a class="btn" href="${esc(tk)}" target="_blank" rel="noopener">Search on TenderKart ↗</a>
@@ -428,6 +437,7 @@
     d.scrollTop = 0;
     d.querySelector('[data-close]').focus();
     bindCalculator(t);
+    bindNote(d);
     G = { t, f: null, sim: null, ratio: null, cover: 0, past: new Map(), rec: null, recalc: null };
     loadFull(t);
     renderSimilar(t);
@@ -874,7 +884,7 @@
   }
 
   // ---------- Past results & winners ----------
-  const R = { mode: 'live', all: null, filtered: [], shown: 0, q: '', loading: null };
+  const R = { mode: 'live', all: null, filtered: [], shown: 0, q: '', loading: null, saved: new Set(readJSON(RSAVED_KEY, [])), savedOnly: false };
   const median = (arr) => {
     if (!arr.length) return null;
     const a = [...arr].sort((x, y) => x - y);
@@ -1018,7 +1028,17 @@
     if (!R.all) return;
     const keep = keepPage ? Math.max(R.shown, PAGE) : 0;
     const f = { q: R.q, cat: $('rCat').value, district: $('rDistrict').value, dept: $('rDept').value, work: $('rWork').value };
-    const list = filterResults(f);
+    const period = Number($('rPeriod').value) || 0;
+    const [vMin, vMax] = ($('rValue').value || '-').split('-').map((x) => (x === '' ? null : Number(x)));
+    const minBidders = $('rBidderCount').value;
+    const since = period ? Date.now() - period * 30.4 * DAY : 0;
+    const list = filterResults(f).filter((r) => (!R.savedOnly || R.saved.has(r.nit))
+      && (!since || r._award >= since)
+      && (vMin === null || (num(r.value) || 0) >= vMin) && (vMax === null || (num(r.value) || 0) < vMax)
+      && (!minBidders || (minBidders === '1' ? r.bidders?.length === 1 : (r.bidders?.length || 0) >= Number(minBidders))));
+    $('rSavedCount').textContent = R.saved.size;
+    $('rSavedBtn').setAttribute('aria-pressed', String(R.savedOnly));
+    $('rSavedBtn').classList.toggle('on', R.savedOnly);
     const sort = $('rSort').value;
     const by = {
       new: (a, b) => b._award - a._award,
@@ -1042,7 +1062,7 @@
     const chips = [...people.values()].sort((a, b) => b.n - a.n).slice(0, 8);
     $('rPeople').hidden = !chips.length;
     $('rPeople').innerHTML = chips.length ? `<span>Contractors matching “${esc(R.q.trim())}”:</span>${chips.map((c) => `<button type="button" class="chip" data-win="${esc(c.name)}">${esc(splitName(c.name).firm)} <b>${c.n}</b></button>`).join('')}` : '';
-    for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork']) $(id).classList.toggle('set', Boolean($(id).value));
+    for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork', 'rPeriod', 'rValue', 'rBidderCount']) $(id).classList.toggle('set', Boolean($(id).value));
     $('rList').innerHTML = '';
     moreResults();
     while (R.shown < Math.min(keep, R.filtered.length)) moreResults();
@@ -1091,6 +1111,7 @@
           ${hitLine}
         </div>
         <div class="rside">
+          <button class="save rfav ${R.saved.has(r.nit) ? 'on' : ''}" type="button" data-rsave="${esc(r.nit)}" aria-pressed="${R.saved.has(r.nit)}" aria-label="Save this result">${heartIcon}</button>
           <span class="rlabel">Winner</span>
           <strong class="rwinner">${esc(r.winner || 'Not published')}</strong>
           <div class="rstats">
@@ -1102,7 +1123,10 @@
       <div class="rbody">
         <p class="ref">${esc(r.ref)}${num(r.value) ? ` · Estimate ${money(r.value, { full: true })}` : ''}${r.office ? ` · ${esc(r.office)}` : ''}</p>
         ${r.bidders?.length ? bidderTable(r) : '<p class="note">KPPP has not published the bid comparison for this tender.</p>'}
-        <div><button class="btn primary" type="button" data-award="${esc(r.nit)}">Full result · timeline &amp; item-wise rates</button></div>
+        ${noteOf('r:' + r.nit) ? `<p class="note-line">📝 ${esc(noteOf('r:' + r.nit))}</p>` : ''}
+        <div class="row-actions"><button class="btn primary" type="button" data-award="${esc(r.nit)}">Full result · timeline &amp; item-wise rates</button>
+          <button class="btn" type="button" data-rdl="xlsx" data-nit="${esc(r.nit)}">${dlIcon} Excel</button>
+          <button class="btn" type="button" data-rdl="pdf" data-nit="${esc(r.nit)}">${dlIcon} PDF</button></div>
       </div>
     </details>`;
   }
@@ -1202,7 +1226,9 @@
       <div class="tp-bar"><div class="wrap tp-bar-in">
         <button class="btn ghost" type="button" data-close>${icon.back} Back to results</button>
         <span class="spacer"></span>
-        <button class="btn" type="button" data-copy="${esc(r.ref)}">Copy tender no.</button>
+        <button class="btn" type="button" data-rdl="xlsx" data-nit="${esc(r.nit)}">${dlIcon} Excel</button>
+        <button class="btn" type="button" data-rdl="pdf" data-nit="${esc(r.nit)}">${dlIcon} PDF</button>
+        <button class="btn ${R.saved.has(r.nit) ? 'on' : ''}" type="button" data-rsave="${esc(r.nit)}" aria-pressed="${R.saved.has(r.nit)}">${heartIcon}${R.saved.has(r.nit) ? ' Saved' : ' Save'}</button>
       </div></div>
       <header class="tp-hero"><div class="wrap">
         <div class="row"><span class="badge ${esc(r.cat)}">${esc(r.cat)}</span><span class="badge soft">Awarded${r._award ? ' ' + esc(shortDate.format(new Date(r._award))) : ''}</span>${r.work ? `<span class="badge soft">${esc(r.work)}</span>` : ''}</div>
@@ -1218,6 +1244,7 @@
           <div class="kpi"><span>Won by</span><strong>${l1?.amount && l2?.amount ? money(l2.amount - l1.amount) || '₹0' : '—'}</strong><small>${l1?.amount && l2?.amount ? `${((l2.amount - l1.amount) / l2.amount * 100).toFixed(2)}% less than L2` : 'gap to the second bidder'}</small></div>
         </div>
         ${r.bidders?.length ? `<section class="panel"><h3>All bids <span class="count">${r.bidders.length}</span></h3>${bidderTable(r)}</section>` : ''}
+        ${notePanel('r:' + r.nit)}
         <div id="awardMore"><section class="panel"><h3>Loading timeline and item-wise rates…</h3><div class="skeleton line"></div><div class="skeleton line short"></div></section></div>
       </div>`;
     d.setAttribute('aria-hidden', 'false');
@@ -1225,6 +1252,7 @@
     document.body.style.overflow = 'hidden';
     d.scrollTop = 0;
     d.querySelector('[data-close]').focus();
+    bindNote(d);
     const hash = '#a=' + encodeURIComponent(r.nit);
     if (location.hash !== hash) history.pushState({ award: r.nit }, '', hash);
 
@@ -1467,6 +1495,193 @@
     if (location.hash !== hash) history.pushState({ contractor: display }, '', hash);
   }
 
+  // ---------- Favourite results, notes and downloads ----------
+  function toggleResultSave(nit) {
+    if (R.saved.has(nit)) R.saved.delete(nit); else R.saved.add(nit);
+    writeJSON(RSAVED_KEY, [...R.saved]);
+    const on = R.saved.has(nit);
+    document.querySelectorAll(`[data-rsave="${CSS.escape(nit)}"]`).forEach((b) => {
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', String(on));
+      if (b.classList.contains('btn')) b.lastChild.textContent = on ? ' Saved' : ' Save';
+    });
+    $('rSavedCount').textContent = R.saved.size;
+    toast(on ? 'Result saved' : 'Removed from saved results');
+    if (R.savedOnly && !on) applyResults({ keepPage: true });
+  }
+
+  const notes = readJSON(NOTES_KEY, {});
+  function noteOf(key) { return notes[key] || ''; }
+  function notePanel(key) {
+    return `<section class="panel notes"><h3>My notes</h3>
+      <textarea class="note-box" data-note="${esc(key)}" rows="3" placeholder="Private notes — site visit, material rates, who to call… Saved on this device.">${esc(noteOf(key))}</textarea>
+      <small class="note-saved" aria-live="polite"></small></section>`;
+  }
+  function bindNote(root) {
+    const box = root.querySelector('[data-note]');
+    if (!box) return;
+    let timer;
+    box.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const v = box.value.trim();
+        if (v) notes[box.dataset.note] = v; else delete notes[box.dataset.note];
+        writeJSON(NOTES_KEY, notes);
+        const s = root.querySelector('.note-saved');
+        if (s) s.textContent = v ? 'Saved' : '';
+        const key = box.dataset.note;
+        if (key.startsWith('t:')) {
+          const el = document.querySelector(`.card[data-id="${CSS.escape(key.slice(2))}"]`);
+          const t = S.byId.get(key.slice(2));
+          if (el && t) el.outerHTML = card(t);
+        }
+      }, 400);
+    });
+  }
+
+  // One helper for every download: sections become sheets (Excel) or tables (PDF).
+  async function downloadDoc({ title, lines = [], sections, fileBase }, kind) {
+    try {
+      if (kind === 'xlsx') {
+        toast('Preparing Excel file…');
+        await loadScript('/vendor/xlsx.mini.min.js');
+        const X = window.XLSX;
+        const wb = X.utils.book_new();
+        const used = new Set();
+        for (const sec of sections) {
+          const aoa = sec.kv ? [[title], ...lines.map((l) => [l]), [], ...sec.kv] : [sec.head, ...sec.rows];
+          const ws = X.utils.aoa_to_sheet(aoa);
+          ws['!cols'] = (sec.widths || (sec.kv ? [28, 90] : sec.head.map(() => 16))).map((wch) => ({ wch }));
+          let name = sec.heading.replace(/[\\/?*[\]:]/g, ' ').slice(0, 31);
+          while (used.has(name)) name = name.slice(0, 28) + used.size;
+          used.add(name);
+          X.utils.book_append_sheet(wb, ws, name);
+        }
+        X.writeFile(wb, fileBase + '.xlsx');
+      } else {
+        toast('Preparing PDF…');
+        await loadScript('/vendor/jspdf.umd.min.js');
+        await loadScript('/vendor/jspdf.plugin.autotable.min.js');
+        const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+        const pdfText = (v) => String(v ?? '').replace(/₹/g, 'Rs. ');
+        doc.setFontSize(14);
+        const titleLines = doc.splitTextToSize(pdfText(title), 760).slice(0, 3);
+        doc.text(titleLines, 40, 40);
+        doc.setFontSize(9);
+        let y = 40 + 17 * titleLines.length + 2;
+        if (lines.length) { doc.text(doc.splitTextToSize(lines.map(pdfText).join('\n'), 760), 40, y); y += 12 * lines.length + 8; }
+        for (const sec of sections) {
+          doc.setFontSize(11);
+          if (y > 520) { doc.addPage(); y = 40; }
+          doc.text(sec.heading, 40, y + 4);
+          doc.autoTable({
+            startY: y + 10,
+            head: sec.kv ? undefined : [sec.head.map(pdfText)],
+            body: (sec.kv || sec.rows).map((row) => row.map((c) => (typeof c === 'number' ? c.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : pdfText(c)))),
+            styles: { fontSize: 7.5, cellPadding: 3, overflow: 'linebreak' },
+            headStyles: { fillColor: [79, 70, 229] },
+            columnStyles: sec.kv ? { 0: { cellWidth: 170, fontStyle: 'bold' } } : {},
+            margin: { left: 40, right: 40 }
+          });
+          y = doc.lastAutoTable.finalY + 24;
+        }
+        doc.save(fileBase + '.pdf');
+      }
+    } catch {
+      toast('Download failed — please try again');
+    }
+  }
+  const safeFile = (v) => String(v || 'tender').replace(/[^\w-]+/g, '_').slice(0, 80);
+  const ist = (ms) => (ms ? dateFmt.format(new Date(ms)) : '');
+
+  // Live tender: summary, details, bill of quantities (with my rates when entered) and my notes.
+  async function exportTender(t, kind) {
+    let f = null;
+    if (t.nit) {
+      const key = `${t.cat}/${t.nit}`;
+      try {
+        if (!detailCache.has(key)) detailCache.set(key, fetch(`/api/tender/${key}`).then((r) => r.json()).then((j) => (j.success ? j : Promise.reject(new Error('n/a')))));
+        f = await detailCache.get(key);
+      } catch { detailCache.delete(`${t.cat}/${t.nit}`); f = null; }
+    }
+    const kv = [
+      ['Tender number', t.ref], ['Work', t.title], ['Category', t.cat], ['Department', t.dept], ['Office', t.office], ['District', t.district],
+      ['Type of work', t.work], ['Who can bid', t.access], ['Tender value', num(t.value) ? money(t.value, { full: true }) : 'Not published'],
+      ['EMD', num(t.emd) ? money(t.emd, { full: true }) : 'Not published'], ['Tender fee', num(t.fee) ? money(t.fee, { full: true }) : 'Not published'],
+      ['Published', ist(t._pub)], ['Bid submission ends', ist(t._close)]
+    ];
+    if (f) {
+      kv.push(['Bids open', fmtKppp(f.dates?.opening) || ''], ['Last date for questions', fmtKppp(f.dates?.queries) || ''],
+        ['Evaluation', f.terms?.evaluation || ''], ['Bid type', f.terms?.bidType || ''],
+        ['Contact', [f.contact?.person, f.contact?.mobile].filter(Boolean).join(' · ')], ['Address', f.contact?.address || '']);
+      for (const c of f.changes || []) kv.push([`Changed: ${c.field}`, `${c.from} → ${c.to}`]);
+    }
+    if (G.rec && G.t === t) kv.push(['Suggested bid (past winners)', money(G.rec, { full: true })]);
+    if (noteOf('t:' + t.id)) kv.push(['My notes', noteOf('t:' + t.id)]);
+    const sections = [{ heading: 'Summary', kv: kv.filter(([, v]) => v) }];
+    if (f?.eligibility?.length) sections.push({ heading: 'Eligibility', head: ['#', 'Condition'], rows: f.eligibility.map((x, i) => [i + 1, x]), widths: [5, 120] });
+    if (f?.documents?.length) sections.push({ heading: 'Documents to upload', head: ['Document', 'Cover', 'Mandatory'], rows: f.documents.map((d) => [d.name, d.cover || '', d.optional ? 'No' : 'Yes']), widths: [80, 20, 12] });
+    if (f?.groups?.some((g) => g.items.length)) {
+      const saved = readJSON(`tenderone_bid_${t.cat}_${t.nit}`, {});
+      const rows = [];
+      f.groups.forEach((g, gi) => g.items.forEach((i, ii) => {
+        const my = saved[`${gi}:${ii}`];
+        rows.push([i.code || ii + 1, i.name || '', i.qty ?? '', i.unit || '', num(i.rate) || '', num(i.amount) || '', my ?? '', my != null && i.qty ? Math.round(my * i.qty * 100) / 100 : '']);
+      }));
+      sections.push({ heading: t.cat === 'WORKS' ? 'Bill of quantities' : 'Items', head: ['Item no.', 'Item', 'Qty', 'Unit', 'Dept. rate', 'Dept. amount', 'My rate', 'My amount'], rows, widths: [12, 70, 10, 10, 14, 16, 12, 16] });
+    }
+    await downloadDoc({ title: t.title, lines: [`${t.ref} · ${t.dept || ''}`, 'From TenderOne (KPPP data) · ' + new Date().toLocaleDateString('en-IN')], sections, fileBase: `tender-${safeFile(t.ref)}` }, kind);
+  }
+
+  // Past result: summary, every bid, timeline and item-wise rates when available.
+  async function exportResult(nit, kind) {
+    const r = R.byNit?.get(String(nit));
+    if (!r) return;
+    let a = null;
+    try {
+      if (!awardCache.has(r.nit)) awardCache.set(r.nit, fetch(`/api/award/${encodeURIComponent(r.nit)}`).then((x) => (x.ok ? x.json() : Promise.reject(new Error('n/a')))));
+      a = await awardCache.get(r.nit);
+    } catch { awardCache.delete(r.nit); }
+    const l1 = r.bidders?.[0];
+    const kv = [
+      ['Tender number', r.ref], ['Work', r.title], ['Department', r.dept], ['Office', r.office], ['District', r.district], ['Type of work', r.work],
+      ['Estimate', num(r.value) ? money(r.value, { full: true }) : ''], ['Winner', r.winner], ['Winning bid', l1?.amount ? money(l1.amount, { full: true }) : ''],
+      ['Winner vs estimate', l1?.pct != null ? signed(l1.pct) : ''], ['Bidders', r.bidders?.length || ''], ['Awarded', ist(r._award)]
+    ];
+    const t = a?.timeline || {};
+    for (const [k, v] of [['Published', t.published], ['Bids closed', t.closed || r.closed], ['Price bids opened', t.finOpened], ['Result approved', t.finApproved], ['Performance guarantee', t.pbg]]) if (v) kv.push([k, ist(Date.parse(v))]);
+    for (const [k, v] of [['Opened by', a?.people?.opener], ['Approved by', a?.people?.approver], ['EMD', num(a?.emd) ? money(a.emd, { full: true }) : '']]) if (v) kv.push([k, v]);
+    if (noteOf('r:' + r.nit)) kv.push(['My notes', noteOf('r:' + r.nit)]);
+    const sections = [{ heading: 'Summary', kv: kv.filter(([, v]) => v !== '' && v != null) }];
+    if (r.bidders?.length) {
+      sections.push({ heading: 'All bids', head: ['Rank', 'Bidder', 'Quoted amount', 'vs estimate %', 'Gap to L1'],
+        rows: r.bidders.map((b) => [b.rank ? 'L' + b.rank : '', b.name, b.amount || '', b.pct ?? '', l1?.amount && b.amount && b.rank !== 1 ? Math.round((b.amount - l1.amount) * 100) / 100 : '']), widths: [8, 60, 18, 14, 16] });
+    }
+    const items = a?.items || [];
+    const bidders = a?.bidders?.length ? a.bidders : (r.bidders || []);
+    if (items.length && bidders.length) {
+      const cols = bidders.slice(0, 8);
+      sections.push({ heading: 'Item-wise rates', head: ['Item no.', 'Item', 'Unit', 'Qty', 'Dept. rate', ...cols.map((b) => `${b.rank ? 'L' + b.rank + ' ' : ''}${splitName(b.name).firm}`)],
+        rows: items.map((i) => [i.code || '', i.name || '', i.unit || '', i.qty ?? '', i.est ?? '', ...cols.map((_, k) => i.rates?.[k] ?? '')]), widths: [12, 60, 8, 8, 12, ...cols.map(() => 16)] });
+    }
+    await downloadDoc({ title: r.title, lines: [`${r.ref} · ${r.dept || ''}`, 'Awarded result from TenderOne (KPPP data)'], sections, fileBase: `result-${safeFile(r.ref)}` }, kind);
+  }
+
+  // All results matching the filters, as one Excel file.
+  async function exportResults() {
+    const list = R.filtered.slice(0, 20000);
+    const tenders = list.map((r) => { const b = r.bidders || []; return [r.ref, r.title, r.dept, r.office, r.district, r.work, num(r.value) || '', r.awarded ? r.awarded.slice(0, 10) : '', r.winner || '', b[0]?.amount || '', b[0]?.pct ?? '', b.length || '', b[1]?.name || '', b[1]?.amount || '', R.saved.has(r.nit) ? 'Yes' : '', noteOf('r:' + r.nit)]; });
+    const bids = [];
+    for (const r of list) for (const b of r.bidders || []) bids.push([r.ref, r.title, r.district, r.work, num(r.value) || '', b.rank ? 'L' + b.rank : '', b.name, b.amount || '', b.pct ?? '']);
+    await downloadDoc({
+      title: 'Past works results', fileBase: `past-results-${new Date().toISOString().slice(0, 10)}`,
+      sections: [
+        { heading: 'Tenders', head: ['Tender number', 'Work', 'Department', 'Office', 'District', 'Type of work', 'Estimate', 'Awarded', 'Winner', 'Winning bid', 'Winner vs estimate %', 'Bidders', 'L2 bidder', 'L2 bid', 'Saved', 'My notes'], rows: tenders, widths: [26, 60, 30, 30, 14, 16, 14, 12, 40, 14, 12, 8, 40, 14, 8, 40] },
+        { heading: 'All bids', head: ['Tender number', 'Work', 'District', 'Type of work', 'Estimate', 'Rank', 'Bidder', 'Quoted amount', 'vs estimate %'], rows: bids, widths: [26, 60, 14, 16, 14, 6, 44, 16, 12] }
+      ]
+    }, 'xlsx');
+  }
+
   // ---------- Export ----------
   function exportCsv() {
     const rows = [['Tender number', 'Category', 'Title', 'Department', 'Office', 'District', 'Tender value', 'EMD', 'Fee', 'Published', 'Closing', 'Who can bid', 'Work category']];
@@ -1576,13 +1791,21 @@
   setView(readJSON(VIEW_KEY, 'cards'));
   document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
   document.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
-  for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork', 'rSort']) $(id).addEventListener('change', () => applyResults());
+  for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork', 'rSort', 'rPeriod', 'rValue', 'rBidderCount']) $(id).addEventListener('change', () => applyResults());
+  $('rSavedBtn').addEventListener('click', () => { R.savedOnly = !R.savedOnly; applyResults(); });
+  $('rExport').addEventListener('click', () => { if (R.filtered.length) exportResults(); else toast('No results to export'); });
+  $('rSavedCount').textContent = R.saved.size;
+  // Bigger text for easier reading, remembered on this device.
+  const applyText = (big) => { document.documentElement.classList.toggle('big-text', big); $('textBtn').setAttribute('aria-pressed', String(big)); };
+  applyText(readJSON(TEXT_KEY, false));
+  $('textBtn').addEventListener('click', () => { const big = !document.documentElement.classList.contains('big-text'); applyText(big); writeJSON(TEXT_KEY, big); toast(big ? 'Bigger text on' : 'Normal text size'); });
   $('rMore').addEventListener('click', moreResults);
   $('rReset').addEventListener('click', () => {
-    for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork']) $(id).value = '';
-    $('rSort').value = 'new'; R.q = ''; $('q').value = ''; applyResults();
+    for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork', 'rPeriod', 'rValue', 'rBidderCount']) $(id).value = '';
+    $('rSort').value = 'new'; R.q = ''; R.savedOnly = false; $('q').value = ''; applyResults();
   });
   $('resultsView').addEventListener('click', (e) => {
+    if (e.target.closest('[data-rsave], [data-rdl]')) return;
     const aw = e.target.closest('[data-award]');
     if (aw) { e.preventDefault(); openAward(aw.dataset.award); return; }
     const w = e.target.closest('[data-win]');
@@ -1610,6 +1833,14 @@
     const copy = e.target.closest('[data-copy]');
     if (copy) { navigator.clipboard?.writeText(copy.dataset.copy).then(() => toast('Tender number copied')); return; }
     if (e.target.closest('#drawer [data-close]')) { closeDrawer(); return; }
+    const rs = e.target.closest('[data-rsave]');
+    if (rs) { e.preventDefault(); e.stopPropagation(); toggleResultSave(rs.dataset.rsave); return; }
+    const rdl = e.target.closest('[data-rdl]');
+    if (rdl) { e.preventDefault(); e.stopPropagation(); exportResult(rdl.dataset.nit, rdl.dataset.rdl); return; }
+    const tdl = e.target.closest('[data-tdl]');
+    if (tdl) { const t = G.t; if (t) exportTender(t, tdl.dataset.tdl); return; }
+    const cdl = e.target.closest('[data-dl]');
+    if (cdl) { e.stopPropagation(); const t = S.byId.get(cdl.dataset.dl); if (t) exportTender(t, 'pdf'); return; }
     const aw = e.target.closest('#drawer [data-award]');
     if (aw) { e.preventDefault(); openAward(aw.dataset.award); return; }
     const bw = e.target.closest('#drawer [data-win]');
