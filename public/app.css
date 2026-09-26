@@ -277,6 +277,7 @@ html.big-text body{zoom:1.15}
   .cmp-tray{bottom:10px;font-size:13px}
 }
 
+.no-win .win,.no-win .win-group{display:none}
 td.win,th.win{background:color-mix(in srgb,var(--ok) 7%,transparent);white-space:nowrap}
 th.win{color:var(--ok)!important}
 td.win{color:var(--ok);font-weight:700}
@@ -302,8 +303,10 @@ td.win{color:var(--ok);font-weight:700}
   .tp-side{position:sticky;top:72px;align-self:start;max-height:calc(100vh - 88px);overflow:auto;scrollbar-width:thin;padding-bottom:4px}
 }
 @media (min-width:1280px){
-  #tpFull{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
-  #tpFull>.changes,#tpFull>.note,#tpFull>section:only-child{grid-column:1/-1}
+  /* Newspaper-style columns: panels stack tightly in two columns without row gaps. */
+  #tpFull{display:block;columns:2;column-gap:16px}
+  #tpFull>*{break-inside:avoid;margin:0 0 16px}
+  #tpFull>.changes,#tpFull>section:only-child{column-span:all}
 }
 @media (max-width:1000px){
   .tp-pair{grid-template-columns:1fr}
