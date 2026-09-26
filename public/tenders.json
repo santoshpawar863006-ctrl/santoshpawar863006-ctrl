@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-26T16:01:48.145688+00:00",
+  "generated_at": "2026-09-26T17:03:18.804509+00:00",
   "source": "https://kppp.karnataka.gov.in",
   "count": 4931,
   "category_counts": {
@@ -107502,8 +107502,8 @@
       "location": "RDPR Division Office Ramanagaar",
       "district": "",
       "city": "",
-      "amount": 3473281.93,
-      "amount_display": "3473281.93",
+      "amount": 3473281.94,
+      "amount_display": "3473281.94",
       "emd": 69500.0,
       "fee": 870.0,
       "published_date": "19-09-2026 14:38:45",
@@ -107517,7 +107517,7 @@
         "description": "Construction of cc road & drain from Pushpamma house to Papanna house in Rangegowdanadoddi village, Manchanayakanahalli G.P., Bidadi hobli, Ramanagara Taluk.",
         "category": "WORKS",
         "categoryText": "Works",
-        "ecv": 3473281.93,
+        "ecv": 3473281.94,
         "deptId": 52,
         "status": "PUBLISHED",
         "statusText": "Published",
