@@ -425,7 +425,14 @@ async function systemHealth(ctx, env = {}) {
 // Only a hash of a hash of the password is stored here, so the code being public does not reveal it.
 const SESSION_CHECK = '957ec036a47b5f8c5ee58bd189b81bb1e31bcdb6b3abebe77f55adedbfd1ad9b';
 const SESSION_COOKIE = 't1s';
-const OPEN_PATHS = new Set(['/login', '/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/maskable-512.png', '/icons/apple-touch-icon.png']);
+// The sign-in page lives at a secret address; only its hash is here. Everyone else gets a plain 404.
+const LOGIN_PATH_HASH = '0bc8a761dcf1cef08cc1c26a64e060303bf218d4f466a2e7e86f540ea2617b67';
+const OPEN_PATHS = new Set(['/icons/icon-192.png', '/icons/icon-512.png', '/icons/maskable-512.png', '/icons/apple-touch-icon.png']);
+function notFound() {
+  return new Response('<!doctype html><html><head><meta name="robots" content="noindex"><title>404 Not Found</title></head><body><h1>404 Not Found</h1></body></html>', {
+    status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' }
+  });
+}
 async function sha256Hex(text) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -440,7 +447,7 @@ async function signedIn(request) {
 }
 function loginPage(message = '', status = 200) {
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TenderOne · Sign in</title><meta name="theme-color" content="#3730a3"><link rel="manifest" href="/manifest.json"><link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<title>Sign in</title><meta name="robots" content="noindex"><meta name="theme-color" content="#3730a3">
 <style>
   *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:linear-gradient(135deg,#312e81,#6d28d9);color:#0e1330;padding:16px}
   form{background:#fff;border-radius:18px;padding:28px 24px;width:100%;max-width:380px;box-shadow:0 20px 50px rgba(0,0,0,.25);display:grid;gap:14px}
@@ -451,7 +458,7 @@ function loginPage(message = '', status = 200) {
   .err{color:#dc2626;font-weight:600}
   .logo{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#4f46e5,#7c3aed);display:grid;place-items:center;color:#fff;font-weight:800;font-size:22px}
 </style></head><body>
-<form method="post" action="/login">
+<form method="post">
   <div class="logo">T</div>
   <h1>TenderOne</h1>
   <p>Private website. Enter your password once — this device stays signed in for a year.</p>
@@ -479,19 +486,16 @@ export default {
       return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,OPTIONS', 'Access-Control-Allow-Headers': '*' } });
     }
 
-    if (url.pathname === '/login' && request.method === 'POST') return handleLogin(request);
+    if ((await sha256Hex(url.pathname)) === LOGIN_PATH_HASH) {
+      if (request.method === 'POST') return handleLogin(request);
+      return (await signedIn(request)) ? Response.redirect(new URL('/', url).toString(), 302) : loginPage();
+    }
     if (url.pathname === '/logout') {
-      return new Response(null, { status: 303, headers: { Location: '/login', 'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax` } });
+      return new Response(null, { status: 303, headers: { Location: '/', 'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax` } });
     }
+    const allowed = OPEN_PATHS.has(url.pathname) || (await signedIn(request));
+    if (!allowed) return notFound();
     if (request.method !== 'GET' && request.method !== 'HEAD') return json({ success: false, message: 'Method not allowed.' }, 405);
-    if (!OPEN_PATHS.has(url.pathname) && !(await signedIn(request))) {
-      if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/downloads/') || url.pathname.endsWith('.json')) {
-        return json({ success: false, message: 'Please sign in.' }, 401);
-      }
-      if (url.pathname === '/' || url.pathname.endsWith('.html')) return loginPage();
-      return Response.redirect(new URL('/login', url).toString(), 302);
-    }
-    if (url.pathname === '/login') return (await signedIn(request)) ? Response.redirect(new URL('/', url).toString(), 302) : loginPage();
 
     if (['/tenders-lite.json', '/results-lite.json', '/rates-lite.json'].includes(url.pathname)) {
       return proxyRaw(url.pathname.slice(1), ctx, 300, env);
