@@ -32,3 +32,7 @@ The Worker serves the data files from this repo, falling back to the deployed co
 Cloudflare builds and deploys the Worker (`santoshpawar863006-ctrl`, serving tenderone.online, configured in `wrangler.jsonc`) from this repo's `main` branch through its Git integration (Worker → Settings → Build). No secrets are needed.
 
 To run locally: `npm ci && npx wrangler dev`.
+
+## House planner
+
+`house-planner/` is a separate static site: a residential house planner that generates floor plans for a plot, lets you edit them, shows the house in 3D and works out areas, costs, materials and Vastu checks. See [house-planner/README.md](house-planner/README.md). It is not part of the Worker deployment.
