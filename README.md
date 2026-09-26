@@ -17,6 +17,8 @@ An hourly action (`.github/workflows/collect-details.yml`) runs `collect_details
 
 Every 6 hours `.github/workflows/collect-history.yml` runs `collect_history.py`: four parts at once look up every awarded **works** tender since May 2023 (about 1 lakh) and merge them into the `history` branch (one snapshot commit): monthly results and item-wise rates, Excel downloads per year (`/downloads/works-results-YYYY.xlsx`, `/downloads/works-item-rates.xlsx`), `similar.json` (how similar tenders were won, per department / district and type of work, used by the tender page) and `rates.json.gz` (past winning rates per BOQ item, attached to each live works tender by `collect_details.py`). The website's Past results list keeps the most recent 6,000 works results; goods and services results are no longer collected.
 
+`.github/workflows/scheduler.yml` starts these collectors on time (GitHub's own cron is often hours late for small projects) and keeps itself running; the cron lines in each workflow are only a backup.
+
 Data commits carry a skip-build marker: the website reads the data straight from GitHub, so only code changes need a redeploy.
 
 The Worker serves the data files from this repo, falling back to the deployed copy.
