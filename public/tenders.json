@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-26T17:03:18.804509+00:00",
+  "generated_at": "2026-09-26T18:00:51.005207+00:00",
   "source": "https://kppp.karnataka.gov.in",
   "count": 4931,
   "category_counts": {
@@ -56651,8 +56651,8 @@
       "location": "RDPR Division Office Mysuru",
       "district": "",
       "city": "",
-      "amount": 505204.89,
-      "amount_display": "505204.89",
+      "amount": 505204.9,
+      "amount_display": "505204.9",
       "emd": 12000.0,
       "fee": 500.0,
       "published_date": "23-09-2026 14:03:43",
@@ -56666,7 +56666,7 @@
         "description": "REPAIRES AT GOVERNMENT MAHARANI PU COLLEGE MYSORE CITY",
         "category": "WORKS",
         "categoryText": "Works",
-        "ecv": 505204.89,
+        "ecv": 505204.9,
         "deptId": 52,
         "status": "PUBLISHED",
         "statusText": "Published",
