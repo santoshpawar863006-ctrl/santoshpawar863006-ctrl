@@ -208,6 +208,8 @@ td.my input:focus{outline:2px solid var(--brand);border-color:transparent}
 .notes .note-box{width:100%;min-height:76px;resize:vertical;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit;font-size:14px;background:var(--surface);color:var(--ink)}
 .notes .note-box:focus{outline:2px solid var(--brand);border-color:transparent}
 .note-saved{color:var(--ok);font-size:12px;font-weight:700;min-height:14px;display:block;margin-top:4px}
+.status-btn{width:auto;padding:0 12px;gap:6px;display:inline-flex;align-items:center;font-weight:700;font-size:13px}
+@media (max-width:760px){.status-btn span{display:none}.status-btn{width:34px;padding:0}}
 .text-btn{display:inline-flex;align-items:baseline;justify-content:center;gap:1px;font-weight:800;font-size:12px;letter-spacing:-.02em;padding-top:6px}
 .text-btn span{font-size:17px}
 .text-btn[aria-pressed="true"]{background:rgba(255,255,255,.28)}

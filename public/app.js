@@ -2013,6 +2013,7 @@
   }, { rootMargin: '600px' }).observe($('rMore'));
   $('chips').addEventListener('click', (e) => { const b = e.target.closest('[data-clear]'); if (b) clearFilter(b.dataset.clear); });
   $('statusBtn').addEventListener('click', showStatus);
+  $('statusTopBtn').addEventListener('click', showStatus);
   $('statusDialog').addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === e.currentTarget) $('statusDialog').close(); });
   $('themeBtn').addEventListener('click', () => {
     const dark = document.documentElement.dataset.theme
