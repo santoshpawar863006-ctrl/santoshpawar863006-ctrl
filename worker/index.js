@@ -221,7 +221,7 @@ async function tenderDetail(category, nitId, ctx) {
   let shaped;
   const stored = await storedDetail(category, nitId);
   if (stored) {
-    shaped = { ...shapeTender(category, stored.full, [], nitId), checkedAt: stored.fetched || null, changes: list(stored.changes) };
+    shaped = { ...shapeTender(category, stored.full, [], nitId), checkedAt: stored.fetched || null, changes: list(stored.changes), past: stored.past || null };
     delete shaped.files;
     const response = json(shaped, 200, 'public, max-age=600, s-maxage=600');
     ctx.waitUntil(cache.put(cacheKey, response.clone()));
@@ -305,6 +305,26 @@ async function awardDetail(nitId, ctx) {
   }
 }
 
+// Works history (collect_history.py): comparison figures and Excel downloads, streamed as-is.
+const HISTORY_TYPES = { json: 'application/json; charset=utf-8', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+async function historyFile(path, ctx, ttl, download = false) {
+  const cache = caches.default;
+  const cacheKey = new Request(`https://kppp-history.local/v1/${path}`);
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+  let upstream;
+  try {
+    upstream = await fetch(`${REPO_RAW}/history/${path}`, { cf: { cacheTtl: ttl, cacheEverything: true } });
+  } catch {}
+  if (!upstream || !upstream.ok) return json({ success: false, message: 'Past works history is still being collected.' }, 404, 'public, max-age=120');
+  const ext = path.split('.').pop();
+  const headers = { 'Content-Type': HISTORY_TYPES[ext] || 'application/octet-stream', 'Cache-Control': `public, max-age=${ttl}, s-maxage=${ttl}`, 'Access-Control-Allow-Origin': '*' };
+  if (download) headers['Content-Disposition'] = `attachment; filename="${path.split('/').pop()}"`;
+  const response = new Response(upstream.body, { headers });
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+}
+
 function ageHours(value) {
   const ms = Date.parse(String(value || ''));
   if (!Number.isFinite(ms)) return null;
@@ -378,6 +398,10 @@ export default {
     if (['/tenders-lite.json', '/tenders.json', '/results-lite.json', '/rates-lite.json'].includes(url.pathname)) {
       return proxyRaw(url.pathname.slice(1), ctx, 300, env);
     }
+    if (url.pathname === '/history-index.json') return historyFile('index.json', ctx, 600);
+    if (url.pathname === '/similar-lite.json') return historyFile('similar.json', ctx, 1800);
+    const download = url.pathname.match(/^\/downloads\/(works-[a-z0-9-]+\.xlsx)$/);
+    if (download) return historyFile(`excel/${download[1]}`, ctx, 1800, true);
     if (url.pathname === '/health.json') return proxyRaw('health.json', ctx, 30, env);
     if (url.pathname === '/api/system_health') return systemHealth(ctx, env);
     const detail = url.pathname.match(/^\/api\/tender\/(WORKS|GOODS|SERVICES)\/(\d+)$/);

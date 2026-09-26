@@ -18,8 +18,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
+import gzip
+
 import requests
 from requests.adapters import HTTPAdapter
+
+from collect_results import item_key
 from urllib3.util.retry import Retry
 
 STORE = Path(sys.argv[1] if len(sys.argv) > 1 else "store") / "details"
@@ -31,6 +35,8 @@ FILES = {"WORKS": "get-works-tender-files", "GOODS": "get-goods-tender-files", "
 KEEP = ("noticeInvitingTenderDTO", "tenderSchedule", "tenderAddress", "generalCriterionList",
         "tenderEligibilityCriterionList", "technicalCriterionList", "tenderTechnicalCriterionList",
         "tenderCriterionDocumentList", "tenderSubEstimateList", "tenderGroups")
+# Past winning rates for every BOQ item, built by collect_history.py from all awarded works.
+RATES_URL = "https://raw.githubusercontent.com/santoshpawar863006-ctrl/santoshpawar863006-ctrl/history/rates.json.gz"
 REFRESH_HOURS = float(os.getenv("DETAILS_REFRESH_HOURS", "12"))
 TIME_BUDGET = int(os.getenv("DETAILS_TIME_BUDGET", "1500"))
 WORKERS = int(os.getenv("DETAILS_WORKERS", "8"))
@@ -108,6 +114,41 @@ def fetch(session, cat, nit, old):
     return {k: v for k, v in record.items() if v not in (None, [])}
 
 
+def load_rates():
+    try:
+        response = requests.get(RATES_URL, timeout=120)
+        response.raise_for_status()
+        return json.loads(gzip.decompress(response.content))
+    except Exception as exc:
+        print(f"Past item rates not available yet ({exc})", flush=True)
+        return None
+
+
+def add_past_rates(rates):
+    """Attach past winning rates to each stored works tender's BOQ items (the tender page shows them)."""
+    changed = 0
+    for path in (STORE / "WORKS").glob("*.json"):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        past = {}
+        for group in (record.get("full") or {}).get("tenderSubEstimateList") or []:
+            for item in group.get("itemList") or []:
+                key = item_key(item.get("itemCode"), item.get("description"), item.get("uomName"))
+                hit = rates.get(key)
+                if hit:
+                    past[key] = {"l1": hit["l1"], "tenders": hit["tenders"]}
+        if past != record.get("past"):
+            if past:
+                record["past"] = past
+            else:
+                record.pop("past", None)
+            path.write_text(json.dumps(record, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+            changed += 1
+    return changed
+
+
 def main():
     started = time.monotonic()
     live = json.loads(LIVE.read_text(encoding="utf-8")).get("tenders") or []
@@ -175,6 +216,9 @@ def main():
             if ok % 500 == 0:
                 print(f"  {ok} saved ({int(time.monotonic() - started)}s)", flush=True)
 
+    rates = load_rates()
+    if rates:
+        print(f"Past item rates added or updated for {add_past_rates(rates)} works tenders ({len(rates)} items known)", flush=True)
     stored = sum(1 for _ in STORE.glob("*/*.json"))
     print(f"Saved {ok}, failed {failed}, {changed} with new changes. {stored} of {len(wanted)} live tenders stored "
           f"({int(time.monotonic() - started)}s).")

@@ -1,0 +1,84 @@
+name: Collect KPPP Works History
+
+on:
+  workflow_dispatch:
+  schedule:
+    # The first run fills the whole history (since May 2023); later runs add new awards.
+    - cron: "10 */6 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: collect-history
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    # Four parts at once, each with 6 lookups in parallel: fast, but gentle enough for KPPP.
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Open History
+        run: |
+          mkdir -p history
+          if git fetch --depth 1 origin history; then
+            git archive FETCH_HEAD results | tar -x -C history || true
+            git show FETCH_HEAD:state.json > history/state.json 2>/dev/null || rm -f history/state.json
+          fi
+      - name: Collect Part
+        env:
+          HISTORY_TIME_BUDGET: "18000"
+        run: python collect_history.py collect history part-${{ matrix.part }} ${{ matrix.part }} 4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: part-${{ matrix.part }}
+          path: part-${{ matrix.part }}
+          if-no-files-found: ignore
+          retention-days: 3
+
+  build:
+    needs: collect
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          path: parts
+      - name: Open History
+        # The history lives in the "history" branch, which holds only the latest snapshot.
+        run: |
+          if git fetch --depth 1 origin history; then
+            git worktree add --detach history FETCH_HEAD
+          else
+            git worktree add --detach history HEAD
+            find history -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          fi
+      - name: Merge And Build Excel Files
+        run: python collect_history.py build history $(ls -d parts/part-* 2>/dev/null)
+      - name: Save History Snapshot
+        working-directory: history
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan "snapshot-${GITHUB_RUN_ID}"
+          git rm -rq --cached . > /dev/null 2>&1 || true
+          git add -A
+          git commit -qm "Works history snapshot [skip ci]"
+          git push -f origin HEAD:refs/heads/history
