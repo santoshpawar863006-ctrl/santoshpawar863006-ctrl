@@ -1,13 +1,16 @@
-import json, time, requests
+import io, requests
+from openpyxl import load_workbook
+from collect_results import parse_statement
 API = "https://kppp.karnataka.gov.in/supplier-registration-service/v1/api/portal-service"
-H = {"Accept": "application/json, text/plain, */*", "Content-Type": "application/json", "Origin": "https://kppp.karnataka.gov.in", "Referer": "https://kppp.karnataka.gov.in/",
+H = {"Accept": "*/*", "Origin": "https://kppp.karnataka.gov.in", "Referer": "https://kppp.karnataka.gov.in/",
      "Post": "CONTRACTOR-EPROC-CONTRACTOR", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0 Safari/537.36"}
-for cat, nit in [("GOODS", "54429"), ("SERVICES", "83445"), ("WORKS", "323266")]:
-    for variant in ("download-detailed", "download"):
-        r = requests.get(f"{API}/tender-eval/{nit}/commercial-evaluation/tender-category/{cat}/commercial-comparison/{variant}", headers={**H, "Accept": "*/*"}, timeout=60)
-        print(cat, variant, r.status_code, r.headers.get("content-type"), len(r.content), r.content[:2])
-r = requests.get(f"{API}/333347/get-works-tender-files", headers=H, timeout=60); print("files", r.text[:400])
-for cat, path in [("WORKS", "works/search-eproc-tenders"), ("GOODS", "search-eproc-tenders")]:
-    t = time.time()
-    r = requests.post(f"{API}/{path}?page=0&size=100&order-by-tender-publish=true", json={"category": cat, "status": "AWARDED", "title": ""}, headers=H, timeout=120)
-    print("list", cat, f"{time.time()-t:.1f}s", r.status_code, r.headers.get("X-Total-Count"), len(r.json()))
+for nit in ("54429", "57506"):
+    r = requests.get(f"{API}/tender-eval/{nit}/commercial-evaluation/tender-category/GOODS/commercial-comparison/download-detailed", headers=H, timeout=60)
+    print("==", nit, r.status_code, len(r.content))
+    if r.content[:2] != b"PK": print(r.text[:300]); continue
+    for ws in load_workbook(io.BytesIO(r.content)).worksheets:
+        print("sheet", ws.title)
+        for row in ws.iter_rows(values_only=True):
+            if any(v not in (None, "") for v in row): print("  ", [v for v in row][:24])
+    try: print("parsed", parse_statement(r.content))
+    except Exception as e: print("parse failed", repr(e))
