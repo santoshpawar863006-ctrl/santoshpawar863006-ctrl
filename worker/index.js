@@ -421,6 +421,57 @@ async function systemHealth(ctx, env = {}) {
   }, 200, 'public, max-age=60, s-maxage=60');
 }
 
+// ---------- Private site: one password, remembered on each device for a year ----------
+// Only a hash of a hash of the password is stored here, so the code being public does not reveal it.
+const SESSION_CHECK = '957ec036a47b5f8c5ee58bd189b81bb1e31bcdb6b3abebe77f55adedbfd1ad9b';
+const SESSION_COOKIE = 't1s';
+const OPEN_PATHS = new Set(['/login', '/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/maskable-512.png', '/icons/apple-touch-icon.png']);
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+function readCookie(request, name) {
+  const match = (request.headers.get('Cookie') || '').match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
+  return match ? match[1] : null;
+}
+async function signedIn(request) {
+  const token = readCookie(request, SESSION_COOKIE);
+  return Boolean(token && /^[0-9a-f]{64}$/.test(token) && (await sha256Hex(token)) === SESSION_CHECK);
+}
+function loginPage(message = '', status = 200) {
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TenderOne · Sign in</title><meta name="theme-color" content="#3730a3"><link rel="manifest" href="/manifest.json"><link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<style>
+  *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:linear-gradient(135deg,#312e81,#6d28d9);color:#0e1330;padding:16px}
+  form{background:#fff;border-radius:18px;padding:28px 24px;width:100%;max-width:380px;box-shadow:0 20px 50px rgba(0,0,0,.25);display:grid;gap:14px}
+  h1{margin:0;font-size:22px}p{margin:0;color:#5b6285;font-size:14px;line-height:1.5}
+  input{width:100%;height:48px;border:1px solid #d9dcea;border-radius:12px;padding:0 14px;font-size:16px}
+  input:focus{outline:2px solid #4f46e5;border-color:transparent}
+  button{height:48px;border:0;border-radius:12px;background:linear-gradient(90deg,#4f46e5,#7c3aed);color:#fff;font-size:16px;font-weight:700;cursor:pointer}
+  .err{color:#dc2626;font-weight:600}
+  .logo{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#4f46e5,#7c3aed);display:grid;place-items:center;color:#fff;font-weight:800;font-size:22px}
+</style></head><body>
+<form method="post" action="/login">
+  <div class="logo">T</div>
+  <h1>TenderOne</h1>
+  <p>Private website. Enter your password once — this device stays signed in for a year.</p>
+  ${message ? `<p class="err">${message}</p>` : ''}
+  <input type="password" name="password" autocomplete="current-password" placeholder="Password" required autofocus>
+  <button type="submit">Sign in</button>
+</form></body></html>`;
+  return new Response(html, { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
+}
+async function handleLogin(request) {
+  let password = '';
+  try { password = String((await request.formData()).get('password') || '').trim(); } catch {}
+  const token = await sha256Hex('tenderone-session:' + password);
+  if ((await sha256Hex(token)) !== SESSION_CHECK) return loginPage('That password is not right. Please try again.', 401);
+  return new Response(null, {
+    status: 303,
+    headers: { Location: '/', 'Set-Cookie': `${SESSION_COOKIE}=${token}; Path=/; Max-Age=31536000; HttpOnly; Secure; SameSite=Lax`, 'Cache-Control': 'no-store' }
+  });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -428,7 +479,19 @@ export default {
       return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,OPTIONS', 'Access-Control-Allow-Headers': '*' } });
     }
 
+    if (url.pathname === '/login' && request.method === 'POST') return handleLogin(request);
+    if (url.pathname === '/logout') {
+      return new Response(null, { status: 303, headers: { Location: '/login', 'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax` } });
+    }
     if (request.method !== 'GET' && request.method !== 'HEAD') return json({ success: false, message: 'Method not allowed.' }, 405);
+    if (!OPEN_PATHS.has(url.pathname) && !(await signedIn(request))) {
+      if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/downloads/') || url.pathname.endsWith('.json')) {
+        return json({ success: false, message: 'Please sign in.' }, 401);
+      }
+      if (url.pathname === '/' || url.pathname.endsWith('.html')) return loginPage();
+      return Response.redirect(new URL('/login', url).toString(), 302);
+    }
+    if (url.pathname === '/login') return (await signedIn(request)) ? Response.redirect(new URL('/', url).toString(), 302) : loginPage();
 
     if (['/tenders-lite.json', '/results-lite.json', '/rates-lite.json'].includes(url.pathname)) {
       return proxyRaw(url.pathname.slice(1), ctx, 300, env);
@@ -449,7 +512,7 @@ export default {
     const file = url.pathname.match(/^\/api\/tender-file\/(WORKS|GOODS|SERVICES)\/(\d+)\/([0-9a-fA-F-]+)$/);
     if (file) return tenderFile(file[1], file[2], file[3], url.searchParams.get('name'), url.searchParams.has('dl'));
     // Old bookmarks to the removed login/admin pages go to the tender list.
-    if (['/login', '/login.html', '/admin', '/admin.html'].includes(url.pathname)) {
+    if (['/login.html', '/admin', '/admin.html'].includes(url.pathname)) {
       return Response.redirect(new URL('/', url).toString(), 301);
     }
     if (url.pathname.startsWith('/api/')) {

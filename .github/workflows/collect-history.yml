@@ -3,8 +3,8 @@ name: Collect KPPP Works History
 on:
   workflow_dispatch:
   schedule:
-    # The first run fills the whole history (since May 2023); later runs add new awards.
-    - cron: "10 */6 * * *"
+    # Backup only; the scheduler starts it once a day.
+    - cron: "10 22 * * *"
 
 permissions:
   contents: write
