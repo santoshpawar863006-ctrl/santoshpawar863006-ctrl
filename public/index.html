@@ -15,8 +15,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=20260926p">
-<script src="/app.js?v=20260926s" defer></script>
+<link rel="stylesheet" href="/app.css?v=20260926q">
+<script src="/app.js?v=20260926t" defer></script>
 </head>
 <body>
 <header class="hero">
@@ -88,6 +88,12 @@
         <option value="">Open &amp; reserved</option>
         <option value="Open">Open only</option>
         <option value="Reserved">Reserved only</option>
+      </select></div>
+      <div class="select"><select id="fBidTime" aria-label="Time to bid">
+        <option value="">Any time to bid</option>
+        <option value="7">⚡ Under 7 days to bid</option>
+        <option value="8">⚡ 7 days or less to bid</option>
+        <option value="11">10 days or less to bid</option>
       </select></div>
       <div class="select"><select id="fSort" aria-label="Sort">
         <option value="new">Newest first</option>
@@ -166,6 +172,10 @@
   <details class="panel charts" id="rCharts">
     <summary><h3>Charts &amp; trends for these results</h3><span class="note">Discount by month, districts, departments, busiest winners</span></summary>
     <div id="rChartsBody"></div>
+  </details>
+  <details class="panel charts" id="rQuick">
+    <summary><h3>⚡ Quick tenders</h3><span class="note">Published and closed fast: which offices, which months, who wins</span></summary>
+    <div id="rQuickBody"><p class="muted-p">Loading…</p></div>
   </details>
   <section class="panel downloads" id="rDownloads" hidden></section>
   <div class="results-head"><h2 id="rTitle">Loading results…</h2><p class="note" style="margin:0">Recent works winners and bid amounts published by KPPP. Search a contractor's name to see their bids.</p></div>
