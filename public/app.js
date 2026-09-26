@@ -1125,8 +1125,9 @@
         ${r.bidders?.length ? bidderTable(r) : '<p class="note">KPPP has not published the bid comparison for this tender.</p>'}
         ${noteOf('r:' + r.nit) ? `<p class="note-line">📝 ${esc(noteOf('r:' + r.nit))}</p>` : ''}
         <div class="row-actions"><button class="btn primary" type="button" data-award="${esc(r.nit)}">Full result · timeline &amp; item-wise rates</button>
-          <button class="btn" type="button" data-rdl="xlsx" data-nit="${esc(r.nit)}">${dlIcon} Excel</button>
-          <button class="btn" type="button" data-rdl="pdf" data-nit="${esc(r.nit)}">${dlIcon} PDF</button></div>
+          <button class="btn ${R.saved.has(r.nit) ? 'on' : ''}" type="button" data-rsave="${esc(r.nit)}" aria-pressed="${R.saved.has(r.nit)}">${heartIcon}${R.saved.has(r.nit) ? ' Saved' : ' Save'}</button>
+          <button class="btn" type="button" data-rdl="xlsx" data-nit="${esc(r.nit)}">${dlIcon} Download Excel</button>
+          <button class="btn" type="button" data-rdl="pdf" data-nit="${esc(r.nit)}">${dlIcon} Download PDF</button></div>
       </div>
     </details>`;
   }
