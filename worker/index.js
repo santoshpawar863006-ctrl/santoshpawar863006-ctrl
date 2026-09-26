@@ -382,6 +382,26 @@ async function itemwiseFile(file, ctx) {
   return response;
 }
 
+// One past tender's bidders and item-wise rates (collect_history.py write_tender_bids).
+async function tenderBids(nit, month, ctx) {
+  if (!/^\d+$/.test(nit) || !/^\d{4}-\d{2}$/.test(month || '')) return json({ success: false, message: 'Unknown tender.' }, 400);
+  const cache = caches.default;
+  const cacheKey = new Request(`https://kppp-bids.local/v1/${month}/${nit}`);
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+  const bucket = (crc32(nit) % 128).toString(16).padStart(2, '0');
+  let data = null;
+  try {
+    const upstream = await fetch(`${REPO_RAW}/history/bids/${month}/${bucket}.json`, { cf: { cacheTtl: 3600, cacheEverything: true } });
+    if (upstream.ok) data = await upstream.json();
+  } catch {}
+  const entry = data?.[nit];
+  if (!entry) return json({ success: false, message: 'Bids for this tender are not collected yet.' }, 404, 'private, max-age=300');
+  const response = json({ success: true, nit, bidders: entry.b || [], items: entry.i || [] }, 200, 'private, max-age=86400');
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+}
+
 function ageHours(value) {
   const ms = Date.parse(String(value || ''));
   if (!Number.isFinite(ms)) return null;
@@ -525,6 +545,9 @@ export default {
     if (url.pathname === '/history-index.json') return historyFile('index.json', ctx, 600);
     if (url.pathname === '/similar-lite.json') return historyFile('similar.json', ctx, 1800);
     if (url.pathname === '/leaders.json') return historyFile('leaders.json', ctx, 1800);
+    if (url.pathname === '/bidders.json') return historyFile('bidders.json', ctx, 1800);
+    const bids = url.pathname.match(/^\/api\/tender-bids\/(\d+)$/);
+    if (bids) return tenderBids(bids[1], url.searchParams.get('m'), ctx);
     const itemwise = url.pathname.match(/^\/downloads\/(itemwise-\d{4}-\d{2}\.xlsx)$/);
     if (itemwise) return itemwiseFile(itemwise[1], ctx);
     const download = url.pathname.match(/^\/downloads\/(works-[a-z0-9-]+\.xlsx)$/);

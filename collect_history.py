@@ -257,12 +257,13 @@ def build_contractors(results, root):
                 rv[1] += 1
                 if b.get("rank") and ob.get("rank") and b["rank"] < ob["rank"]:
                     rv[2] += 1
-            p["recent"].append((r.get("closed") or "", {
-                "nit": r.get("nit"), "ref": r.get("ref"), "title": (r.get("title") or "")[:90], "closed": (r.get("closed") or "")[:10],
-                "district": r.get("district"), "dept": r.get("dept"), "value": r.get("value"),
-                "rank": b.get("rank"), "amount": b.get("amount"), "pct": pct,
-                "winner": None if won else r.get("winner"), "bidders": len(bidders) or None,
-            }))
+            # [nit, closed date, tender number, work, district, department, estimate, their rank,
+            #  their amount, their % vs estimate, winner (when not them), number of bidders]
+            p["recent"].append((r.get("closed") or "", [
+                r.get("nit"), (r.get("closed") or "")[:10], r.get("ref"), (r.get("title") or "")[:90],
+                r.get("district"), r.get("dept"), r.get("value"), b.get("rank"), b.get("amount"), pct,
+                None if won else r.get("winner"), len(bidders) or None,
+            ]))
     top = lambda d, n: [[k, v[0]] for k, v in sorted(d.items(), key=lambda kv: -kv[1][0])[:n]]
     shards = {}
     for key, p in people.items():
@@ -273,11 +274,10 @@ def build_contractors(results, root):
             "years": dict(sorted(p["years"].items())),
             "districts": top(p["district"], 6), "depts": top(p["dept"], 6), "works": top(p["work"], 6),
             "rivals": sorted(p["rivals"].values(), key=lambda v: -v[1])[:8],
-            "recent": [x for _, x in sorted(p["recent"], key=lambda t: t[0], reverse=True)[:12]],
+            "tenders": [x for _, x in sorted(p["recent"], key=lambda t: t[0], reverse=True)],
             "first": min((d for d, _ in p["recent"] if d), default="")[:10] or None,
             "last": max((d for d, _ in p["recent"] if d), default="")[:10] or None,
         }
-        entry["recent"] = [{k: v for k, v in x.items() if v not in (None, "")} for x in entry["recent"]]
         shards.setdefault(contractor_shard(key), {})[key] = entry
     folder = root / "contractors"
     folder.mkdir(parents=True, exist_ok=True)
@@ -286,6 +286,50 @@ def build_contractors(results, root):
     for shard, entries in shards.items():
         (folder / f"{shard}.json").write_text(json.dumps(entries, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     return people
+
+
+def write_bidders_index(people, root):
+    """All bidders for the Bidders tab: [name, bids, wins, value won, latest bid, top districts, usual winning %]."""
+    rows = []
+    for key, p in people.items():
+        dates = [d for d, _ in p["recent"] if d]
+        districts = [k for k, _ in sorted(p["district"].items(), key=lambda kv: -kv[1][0])[:3]]
+        wp = sorted(p["wpct"])
+        rows.append([max(p["names"], key=p["names"].get), p["bids"], p["wins"], round(p["value"]),
+                     max(dates)[:10] if dates else None, districts, round(wp[len(wp) // 2], 1) if wp else None])
+    rows.sort(key=lambda r: (-r[2], -r[1]))
+    (root / "bidders.json").write_text(json.dumps({"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                                    "bidders": rows}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
+
+BID_BUCKETS = 128
+
+
+def write_tender_bids(store, root):
+    """Every tender's bidders and item-wise rates, for the tender view on contractor pages.
+
+    Split by month and 128 buckets (crc32 of the NIT id) so the worker only reads a small file:
+    bids/{YYYY-MM}/{xx}.json -> {nit: {"b": [[name, amount, rank, pct]...], "i": [[code, name, unit, qty, rate, [rates]]...]}}
+    """
+    folder = root / "bids"
+    for month in sorted(store.results):
+        if month == "unknown":
+            continue
+        buckets = {}
+        items = store.month_items(month)
+        for nit, r in store.results[month].items():
+            entry = {"b": [[b.get("name"), b.get("amount"), b.get("rank"), b.get("pct")] for b in r.get("bidders") or []]}
+            its = items.get(nit)
+            if its:
+                entry["i"] = [[code, name, unit, qty, est, rates] for _key, code, name, unit, qty, est, rates in its]
+            buckets.setdefault(f"{zlib.crc32(str(nit).encode()) % BID_BUCKETS:02x}", {})[nit] = entry
+        out = folder / month
+        out.mkdir(parents=True, exist_ok=True)
+        for name, data in buckets.items():
+            text = json.dumps(data, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+            path = out / f"{name}.json"
+            if not path.exists() or path.read_text(encoding="utf-8") != text:
+                path.write_text(text, encoding="utf-8")
 
 
 def split_name(name):
@@ -567,6 +611,8 @@ def build(history, parts, itemwise_out=None):
     people = build_contractors(results, history)
     contractors = len(people)
     files.append(write_bidder_database(people, history))
+    write_bidders_index(people, history)
+    write_tender_bids(store, history)
     itemwise = write_itemwise(store, history, itemwise_out) if itemwise_out else []
     closed = sorted(r["closed"] for r in results if r.get("closed"))
     (history / "index.json").write_text(json.dumps({
