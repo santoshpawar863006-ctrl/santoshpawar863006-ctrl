@@ -15,7 +15,7 @@ An action every 2 hours (`.github/workflows/collect-results.yml`) runs `collect_
 
 An hourly action (`.github/workflows/collect-details.yml`) runs `collect_details.py`, which keeps a copy of every live tender's full KPPP details and documents list in the `data` branch (`details/{CATEGORY}/{nitId}.json`, one snapshot commit that replaces the last). The website serves that copy, so tender pages open instantly, and asks KPPP live only for tenders not collected yet. When a department changes the closing date, EMD, fee, value or documents, the change is recorded and shown on the tender page.
 
-Data commits say `[skip ci]`: the website reads the data straight from GitHub, so only code changes need a redeploy.
+Data commits carry a skip-build marker: the website reads the data straight from GitHub, so only code changes need a redeploy.
 
 The Worker serves the data files from this repo, falling back to the deployed copy. TenderKart blocks automated lookups, so tenders link to a TenderKart search instead.
 
