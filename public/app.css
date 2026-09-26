@@ -277,6 +277,17 @@ html.big-text body{zoom:1.15}
   .cmp-tray{bottom:10px;font-size:13px}
 }
 
+td.win,th.win{background:color-mix(in srgb,var(--ok) 7%,transparent);white-space:nowrap}
+th.win{color:var(--ok)!important}
+td.win{color:var(--ok);font-weight:700}
+.win-group{color:var(--ok);font-weight:700;font-size:13px}
+.win-sum{border:1px solid color-mix(in srgb,var(--ok) 40%,var(--line));background:var(--ok-soft);border-radius:14px;padding:12px 14px;margin:10px 0 8px}
+.win-sum[hidden]{display:none}
+.win-sum span{font-size:12px;font-weight:700;color:var(--ok);text-transform:uppercase;letter-spacing:.04em;display:block}
+.win-sum strong{font-size:22px;color:var(--ok);display:block}
+.win-sum small{color:var(--ink-2);font-size:12.5px}
+.win-sum .note{margin:6px 0 0}
+
 /* ---------- Contractor profile ---------- */
 .cp{display:flex;flex-direction:column;gap:16px;padding-top:22px;padding-bottom:60px}
 .cp-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
