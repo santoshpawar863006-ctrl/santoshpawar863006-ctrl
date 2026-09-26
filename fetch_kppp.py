@@ -723,33 +723,51 @@ def request_page(
     status
 ):
 
-    response = session.post(
+    # KPPP sometimes stops answering for a few minutes when it is busy.
+    # Wait and try again a few times instead of failing the whole update.
+    waits = [30, 60, 120]
 
-        url,
+    for attempt in range(len(waits) + 1):
 
-        params={
+        try:
 
-            "page":
-                page,
+            return session.post(
 
-            "size":
-                PAGE_SIZE,
+                url,
 
-            "order-by-tender-publish":
-                "true",
-        },
+                params={
 
-        json=build_payload(
-            category,
-            status
-        ),
+                    "page":
+                        page,
 
-        headers=get_headers(),
+                    "size":
+                        PAGE_SIZE,
 
-        timeout=45,
-    )
+                    "order-by-tender-publish":
+                        "true",
+                },
 
-    return response
+                json=build_payload(
+                    category,
+                    status
+                ),
+
+                headers=get_headers(),
+
+                timeout=90,
+            )
+
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+
+            if attempt == len(waits):
+                raise
+
+            print(
+                f"KPPP did not answer page {page} ({exc.__class__.__name__}); "
+                f"trying again in {waits[attempt]}s"
+            )
+
+            time.sleep(waits[attempt])
 
 
 # ============================================================
