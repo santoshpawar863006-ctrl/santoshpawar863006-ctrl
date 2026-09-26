@@ -403,6 +403,76 @@ def write_bidder_database(people, root):
     return {"file": "works-bidders.xlsx", "year": None, "bidders": len(rows), "bytes": (folder / "works-bidders.xlsx").stat().st_size}
 
 
+def bid_days(record):
+    """Days between publishing and bid closing, or None."""
+    try:
+        return (datetime.fromisoformat(record["closed"]) - datetime.fromisoformat(record["published"])).total_seconds() / 86400
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def write_quick(results, root):
+    """Tenders published and closed fast (quick.json): how they compare, which offices use them, who wins them.
+
+    "Under 7 days" is below the usual minimum time to bid; "7 days" is the minimum itself.
+    """
+    bands = [("Under 7 days", 0, 7), ("7 days", 7, 8), ("8-10 days", 8, 11), ("11-15 days", 11, 16),
+             ("16-30 days", 16, 31), ("Over 30 days", 31, 10 ** 6)]
+    groups = {label: [] for label, _, _ in bands}
+    months = {m: [0, 0, 0] for m in range(1, 13)}
+    offices, quick = {}, []
+    for r in results:
+        days = bid_days(r)
+        if days is None or days < 0:
+            continue
+        bidders = r.get("bidders") or []
+        for label, lo, hi in bands:
+            if lo <= days < hi:
+                groups[label].append(r)
+        month = int(r["published"][5:7])
+        months[month][0] += 1
+        months[month][1] += days < 7
+        months[month][2] += days < 8
+        o = offices.setdefault(r.get("office") or "", {"n": 0, "nb": 0, "q7": 0, "q8": 0, "qb": 0, "w": {},
+                                                        "district": r.get("district"), "dept": r.get("dept")})
+        o["n"] += 1
+        o["nb"] += len(bidders)
+        if days < 8:
+            o["q8"] += 1
+            o["q7"] += days < 7
+            o["qb"] += len(bidders)
+            if r.get("winner"):
+                o["w"][r["winner"]] = o["w"].get(r["winner"], 0) + 1
+        if days < 7:
+            l1 = bidders[0].get("pct") if bidders else None
+            quick.append([r.get("nit"), (r.get("closed") or "")[:10], round(days, 1), r.get("office"), r.get("district"),
+                          r.get("dept"), (r.get("title") or "")[:90], r.get("value"), r.get("winner"), len(bidders), l1])
+
+    def summary(rows):
+        nb = [len(r.get("bidders") or []) for r in rows]
+        pct = sorted(r["bidders"][0]["pct"] for r in rows if r.get("bidders") and r["bidders"][0].get("pct") is not None)
+        return {"tenders": len(rows), "bidders": round(sum(nb) / len(nb), 2) if nb else None,
+                "single": round(sum(n == 1 for n in nb) * 100 / len(nb)) if nb else None,
+                "l1": round(pct[len(pct) // 2], 1) if pct else None}
+
+    office_rows = []
+    for name, o in offices.items():
+        if o["q8"] < 2 or not name:
+            continue
+        top = sorted(o["w"].items(), key=lambda kv: -kv[1])[:3]
+        office_rows.append([name, o["district"], o["dept"], o["n"], o["q8"], o["q7"], round(o["nb"] / o["n"], 1),
+                            round(o["qb"] / o["q8"], 1), top])
+    office_rows.sort(key=lambda r: (-r[5], -r[4]))
+    quick.sort(key=lambda r: r[1], reverse=True)
+    (root / "quick.json").write_text(json.dumps({
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "bands": [dict(label=label, **summary(groups[label])) for label, _, _ in bands],
+        "months": [[m, *months[m]] for m in range(1, 13)],
+        "offices": office_rows,
+        "quick": quick,
+    }, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
+
 def write_itemwise(store, root, out):
     """One Excel file per month: every BOQ item of every tender with each bidder's quoted rate.
 
@@ -613,6 +683,7 @@ def build(history, parts, itemwise_out=None):
     files.append(write_bidder_database(people, history))
     write_bidders_index(people, history)
     write_tender_bids(store, history)
+    write_quick(results, history)
     itemwise = write_itemwise(store, history, itemwise_out) if itemwise_out else []
     closed = sorted(r["closed"] for r in results if r.get("closed"))
     (history / "index.json").write_text(json.dumps({
