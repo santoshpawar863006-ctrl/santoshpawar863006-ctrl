@@ -6,10 +6,36 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with: {python-version: "3.11"}
       - run: pip install -r requirements.txt
-      - run: python probe.py
+      - name: details (small)
+        env: {DETAILS_TIME_BUDGET: "90"}
+        run: |
+          mkdir -p store && python collect_details.py store
+          ls store/details/*/ | head; du -sh store; find store -name '*.json' | wc -l
+          f=$(ls store/details/WORKS/*.json | head -1); head -c 1500 $f; echo
+          python - <<'PY'
+          import json,glob,statistics
+          s=[len(open(f).read()) for f in glob.glob('store/details/*/*.json')]
+          print('sizes median',statistics.median(s),'max',max(s),'total',sum(s))
+          PY
+      - name: results (small)
+        env: {RESULTS_MAX_LOOKUPS: "60", RESULTS_TIME_BUDGET: "240", RESULTS_WORKS_PAGES: "2", RESULTS_GOODS_PAGES: "2", RESULTS_SERVICES_PAGES: "1"}
+        run: |
+          python collect_results.py
+          ls data/awards | wc -l; git status --short | head
+          python - <<'PY'
+          import json,glob
+          fs=sorted(glob.glob('data/awards/*.json'))
+          for f in fs[:1]: print(open(f).read()[:1500])
+          r=json.load(open('public/results-lite.json'))['results']
+          g=[x for x in r if x['cat']=='GOODS' and x.get('bidders')]
+          print('goods with bidders',len(g)); print(g[:1])
+          for f in fs:
+              d=json.load(open(f))
+              if d['cat']=='GOODS' and d.get('items'): print(json.dumps(d)[:1200]); break
+          PY
