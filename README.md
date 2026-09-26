@@ -19,7 +19,7 @@ Every 6 hours `.github/workflows/collect-history.yml` runs `collect_history.py`:
 
 Data commits carry a skip-build marker: the website reads the data straight from GitHub, so only code changes need a redeploy.
 
-The Worker serves the data files from this repo, falling back to the deployed copy. TenderKart blocks automated lookups, so tenders link to a TenderKart search instead.
+The Worker serves the data files from this repo, falling back to the deployed copy.
 
 ## Deploying
 
