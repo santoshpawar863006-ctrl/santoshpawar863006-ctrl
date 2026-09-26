@@ -9,6 +9,8 @@ of KPPP's awarded works tenders (about 1 lakh) and keeps, in the "history" branc
   excel/works-item-rates.xlsx       past winning rates for every BOQ item seen
   rates.json.gz               the same item rates, read by collect_details.py for live tenders
   similar.json                how similar tenders were won, per department / district and type of work
+  itemwise.json               the item-wise Excel files (one per month: every bidder's rate for every
+                              item), which are kept as downloads in the "itemwise" GitHub release
   contractors/{xx}.json       every bidder's record since 2023 (bids, wins, where, rivals, latest tenders),
                               split into 256 files by a hash of the name (worker/index.js looks them up)
   index.json                  what is there, for the website's download list
@@ -276,6 +278,52 @@ def build_contractors(results, root):
     return len(people)
 
 
+def write_itemwise(store, root, out):
+    """One Excel file per month: every BOQ item of every tender with each bidder's quoted rate.
+
+    Only months whose data changed are written to `out` (they are uploaded to the "itemwise"
+    GitHub release by the workflow); root/itemwise.json remembers what each file holds.
+    """
+    import hashlib
+    out.mkdir(parents=True, exist_ok=True)
+    meta = load_json(root / "itemwise.json", {})
+    for month in sorted(store.results):
+        if month == "unknown":
+            continue
+        src = [root / "results" / f"{month}.json", root / "items" / f"{month}.json.gz"]
+        digest = hashlib.sha1(b"v1" + b"".join(p.read_bytes() for p in src if p.exists())).hexdigest()
+        if meta.get(month, {}).get("hash") == digest:
+            continue
+        results, items = store.results[month], store.month_items(month)
+        wb = Workbook(write_only=True)
+        ws = wb.create_sheet("Item bids")
+        head = ["Tender number", "Work", "District", "Department", "Type of work", "Bids closed", "Item code", "Item",
+                "Unit", "Qty", "Dept. rate", "Bidders"]
+        for k in range(1, 6):
+            head += [f"L{k} bidder" + (" (winner)" if k == 1 else ""), f"L{k} rate", f"L{k} vs dept %"]
+        ws.append(head)
+        rows = 0
+        for nit, its in items.items():
+            r = results.get(nit) or {}
+            names = [b.get("name") for b in r.get("bidders") or []]
+            for _key, code, name, unit, qty, est, rates in its:
+                rates = rates or []
+                row = [r.get("ref"), (r.get("title") or "")[:120], r.get("district"), r.get("dept"), r.get("work"),
+                       date_only(r.get("closed")), code, name, unit, qty, est, len(rates) or None]
+                for k in range(5):
+                    rate = rates[k] if k < len(rates) else None
+                    row += [names[k] if k < len(names) else None, rate,
+                            round((rate / est - 1) * 100, 2) if rate and est else None]
+                ws.append(row)
+                rows += 1
+        name = f"itemwise-{month}.xlsx"
+        wb.save(out / name)
+        meta[month] = {"file": name, "hash": digest, "tenders": len(items), "rows": rows, "bytes": (out / name).stat().st_size}
+        print(f"  item-wise {month}: {len(items)} tenders, {rows} rows", flush=True)
+    (root / "itemwise.json").write_text(json.dumps(meta, indent=1, sort_keys=True), encoding="utf-8")
+    return [{"month": m, **{k: v for k, v in info.items() if k != "hash"}} for m, info in sorted(meta.items())]
+
+
 def date_only(value):
     return (value or "")[:10] or None
 
@@ -405,7 +453,7 @@ def collect(history, out, shard, shards):
     print(f"Part {shard + 1} done: {ok} new, {failed} failed, {stats['pages_done']}/{len(mine)} pages ({int(time.monotonic() - started)}s)")
 
 
-def build(history, parts):
+def build(history, parts, itemwise_out=None):
     """Merge the parts into the history, then write the Excel files and comparison figures."""
     started = time.monotonic()
     store = Store(history)
@@ -436,6 +484,7 @@ def build(history, parts):
     (history / "similar.json").write_text(json.dumps(similar, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     files = write_excel(results, rates, history)
     contractors = build_contractors(results, history)
+    itemwise = write_itemwise(store, history, itemwise_out) if itemwise_out else []
     closed = sorted(r["closed"] for r in results if r.get("closed"))
     (history / "index.json").write_text(json.dumps({
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -445,6 +494,7 @@ def build(history, parts):
         "to": closed[-1][:10] if closed else None,
         "complete": bool(state.get("filled_all")),
         "contractors": contractors,
+        "itemwise": itemwise,
         "files": files,
     }, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"Done: {len(results)} works results in history, {len(rates)} BOQ items, "
@@ -453,7 +503,9 @@ def build(history, parts):
 
 if __name__ == "__main__":
     # collect_history.py collect HISTORY OUT SHARD SHARDS  |  collect_history.py build HISTORY PART...
+    # (build writes changed item-wise Excel files to $ITEMWISE_OUT when it is set)
     if sys.argv[1] == "collect":
         collect(Path(sys.argv[2]), Path(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5]))
     else:
-        build(Path(sys.argv[2]), [Path(p) for p in sys.argv[3:]])
+        out = os.getenv("ITEMWISE_OUT")
+        build(Path(sys.argv[2]), [Path(p) for p in sys.argv[3:]], Path(out) if out else None)

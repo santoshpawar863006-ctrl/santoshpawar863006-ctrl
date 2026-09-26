@@ -186,6 +186,9 @@ td.my input:focus{outline:2px solid var(--brand);border-color:transparent}
 .dl small{font-size:12px;color:var(--muted)}
 .dl b::after{content:" ↓";font-size:14px}
 .dl.rates{background:var(--ok-soft)}
+.iw-year{margin-top:10px}
+.iw-year>summary{cursor:pointer;font-size:15px}
+.iw-year .dl-list{margin-top:8px}
 .people{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 12px;font-size:13px}
 .people[hidden]{display:none}
 .people>span{color:var(--muted);font-weight:600}
