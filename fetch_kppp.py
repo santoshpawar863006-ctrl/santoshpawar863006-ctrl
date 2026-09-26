@@ -757,7 +757,7 @@ def request_page(
                 timeout=90,
             )
 
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+        except requests.exceptions.RequestException as exc:
 
             if attempt == len(waits):
                 raise
