@@ -215,6 +215,66 @@ html.big-text body{zoom:1.15}
 #rSavedBtn.on{color:#e11d48;border-color:color-mix(in srgb,#e11d48 35%,var(--line))}
 #rSavedBtn.on svg{fill:currentColor}
 
+/* Watch, compare, charts */
+.cmpb{position:absolute;top:88px;right:12px;width:32px;height:32px;border-radius:9px;border:1px solid var(--line);background:var(--surface);display:grid;place-items:center;color:var(--muted)}
+.cmpb:hover{color:var(--brand)}
+.cmpb.on{color:#fff;background:var(--brand);border-color:var(--brand)}
+.grid.list .cmpb{top:50%;right:92px;transform:translateY(-50%)}
+.grid.list .card{padding-right:136px!important}
+.tp-bar .btn.on[data-cmp],.tp-bar .btn.on[data-follow]{background:var(--brand);color:#fff;border-color:var(--brand)}
+.cmp-tray{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:40;display:flex;align-items:center;gap:10px;padding:10px 12px 10px 16px;border-radius:14px;background:var(--ink);color:var(--bg);box-shadow:0 12px 30px rgba(10,14,40,.3);font-size:14px;max-width:calc(100vw - 32px)}
+.cmp-tray[hidden]{display:none}
+.cmp-tray span{white-space:nowrap}
+.cmp-tray:not([hidden])~.toast{bottom:84px}
+.cmp-tray .btn{height:36px}
+.cmp-tray .btn.ghost{color:var(--bg);border-color:transparent}
+.cmp-tray .btn[disabled]{opacity:.5}
+.drawer-open .cmp-tray,.tender-page.open~.cmp-tray{display:none}
+.cmp-table{min-width:640px}
+.cmp-table thead th{vertical-align:top;min-width:200px;text-transform:none;letter-spacing:0;font-size:13.5px;color:var(--ink)}
+.cmp-table thead th small{display:block;color:var(--muted);font-weight:500;margin:4px 0 6px}
+.cmp-table tbody th{text-align:left;color:var(--muted);font-weight:700;white-space:nowrap;background:var(--surface-2)}
+.cmp-table td.best{background:var(--ok-soft);color:var(--ok);font-weight:800}
+.btn.small{height:28px;padding:0 10px;font-size:12px}
+.usual{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:12px 0 4px;font-size:13px}
+.usual>span{color:var(--muted);font-weight:600}
+.chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:5px 10px;font:inherit;font-size:13px;font-weight:700;color:var(--brand);cursor:pointer}
+.chip b{color:var(--muted);margin-left:4px}
+.chip.watched{background:color-mix(in srgb,var(--brand) 10%,var(--surface));border-color:var(--brand)}
+.eye{font-size:.95em}
+.watch{margin-bottom:14px}
+.watch-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:10px}
+.watch-card{display:flex;flex-direction:column;gap:3px;text-align:left;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);font:inherit;color:var(--ink);cursor:pointer}
+.watch-card:hover{border-color:var(--brand)}
+.watch-card b{color:var(--brand);font-size:14.5px}
+.watch-card span{font-size:12.5px;color:var(--muted);font-weight:600}
+.watch-card em{font-style:normal;font-size:12px;font-weight:800;color:var(--ok)}
+.charts{margin-bottom:14px}
+.charts>summary{list-style:none;cursor:pointer;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px}
+.charts>summary::-webkit-details-marker{display:none}
+.charts>summary h3{margin:0}
+.charts>summary h3::after{content:" ▾";color:var(--muted)}
+.charts[open]>summary h3::after{content:" ▴"}
+.charts h4{margin:0 0 2px;font-size:14px}
+.charts .cp-grid{margin-top:14px}
+.charts section{min-width:0}
+.chart{margin:14px 0 0}
+.chart figcaption{font-size:13px;font-weight:700;color:var(--ink-2);margin-bottom:6px}
+.chart svg{width:100%;max-width:760px;max-height:240px;height:auto;display:block}
+.chart .axis{stroke:var(--line);stroke-width:1}
+.chart .grid{stroke:var(--line);stroke-width:1;stroke-dasharray:3 4}
+.chart .tick{fill:var(--muted);font-size:11px}
+.chart .bar{fill:var(--brand)}
+.chart .hit{fill:transparent}
+.chart .col:hover .bar{fill:var(--brand-2)}
+.chart .col:hover .hit{fill:color-mix(in srgb,var(--brand) 6%,transparent)}
+@media (max-width:760px){
+  .cmp-tray span{white-space:nowrap}
+  .grid.list .cmpb{top:88px;right:12px;transform:none}
+  .grid.list .card{padding-right:52px!important}
+  .cmp-tray{bottom:10px;font-size:13px}
+}
+
 /* ---------- Contractor profile ---------- */
 .cp{display:flex;flex-direction:column;gap:16px;padding-top:22px;padding-bottom:60px}
 .cp-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
