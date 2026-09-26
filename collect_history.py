@@ -222,7 +222,7 @@ def build_contractors(results, root):
                 continue
             won = b.get("rank") == 1 or key == winner_key
             p = people.setdefault(key, {"names": {}, "bids": 0, "wins": 0, "value": 0.0, "wpct": [], "bpct": [],
-                                        "years": {}, "district": {}, "dept": {}, "work": {}, "rivals": {}, "recent": []})
+                                        "years": {}, "district": {}, "dept": {}, "work": {}, "rivals": {}, "recent": [], "dy": {}})
             p["names"][name] = p["names"].get(name, 0) + 1
             p["bids"] += 1
             year = (r.get("closed") or r.get("published") or "")[:4]
@@ -237,9 +237,19 @@ def build_contractors(results, root):
                 p["value"] += b.get("amount") or r.get("value") or 0
                 if pct is not None and -80 < pct < 80:
                     p["wpct"].append(pct)
+            if r.get("district") and year:
+                dy = p["dy"].setdefault(f"{r['district']}|{year}", [0, 0, 0.0])
+                dy[0] += 1
+                if won:
+                    dy[1] += 1
+                    dy[2] += b.get("amount") or r.get("value") or 0
             for field in ("district", "dept", "work"):
                 if r.get(field):
-                    p[field][r[field]] = p[field].get(r[field], 0) + 1
+                    c = p[field].setdefault(r[field], [0, 0, 0.0])  # bids, wins, value won
+                    c[0] += 1
+                    if won:
+                        c[1] += 1
+                        c[2] += b.get("amount") or r.get("value") or 0
             for (other, ob), okey in zip(entries, keys):
                 if okey == key or not okey:
                     continue
@@ -253,7 +263,7 @@ def build_contractors(results, root):
                 "rank": b.get("rank"), "amount": b.get("amount"), "pct": pct,
                 "winner": None if won else r.get("winner"), "bidders": len(bidders) or None,
             }))
-    top = lambda d, n: sorted(d.items(), key=lambda kv: -kv[1])[:n]
+    top = lambda d, n: [[k, v[0]] for k, v in sorted(d.items(), key=lambda kv: -kv[1][0])[:n]]
     shards = {}
     for key, p in people.items():
         med = lambda v: round(sorted(v)[len(v) // 2], 2) if v else None
@@ -275,7 +285,78 @@ def build_contractors(results, root):
         old.unlink()
     for shard, entries in shards.items():
         (folder / f"{shard}.json").write_text(json.dumps(entries, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    return len(people)
+    return people
+
+
+def split_name(name):
+    """'PERSON (1)( FIRM )' -> (firm, person), like splitName() in public/app.js."""
+    m = re.match(r"^(.*?)\s*(?:\(\s*\d+\s*\)\s*)?\(\s*(.+?)\s*\)\s*$", name or "")
+    if m and m.group(1) and m.group(2):
+        return m.group(2), re.sub(r"\s*\(\s*\d+\s*\)\s*$", "", m.group(1))
+    return re.sub(r"\s*\(\s*\d+\s*\)\s*$", "", name or ""), ""
+
+
+def write_bidder_database(people, root):
+    """Every bidder with bids and wins overall, by year, district, department and type of work
+    (excel/bidders.xlsx), and the top bidders per district and year for the website (leaders.json)."""
+    rows = []
+    for key, p in people.items():
+        name = max(p["names"], key=p["names"].get)
+        firm, person = split_name(name)
+        med = lambda v: round(sorted(v)[len(v) // 2], 2) if v else None
+        dates = [d for d, _ in p["recent"] if d]
+        main = lambda d: max(d.items(), key=lambda kv: kv[1][0])[0] if d else None
+        rows.append((key, name, firm, person, p, med(p["wpct"]), med(p["bpct"]),
+                     min(dates)[:10] if dates else None, max(dates)[:10] if dates else None,
+                     main(p["district"]), main(p["dept"]), main(p["work"])))
+    rows.sort(key=lambda r: (-r[4]["wins"], -r[4]["bids"]))
+    years = sorted({y for r in rows for y in r[4]["years"] if y})
+
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("Bidders")
+    ws.append(["Firm", "Person", "Name as on KPPP", "Tenders bid", "Tenders won", "Win rate %", "Value won (Rs)",
+               "Usual winning bid vs estimate %", "Usual bid vs estimate %", "First bid", "Latest bid",
+               "Main district", "Main department", "Main type of work"]
+              + [f"{label} {y}" for y in years for label in ("Bid", "Won")])
+    for key, name, firm, person, p, wpct, bpct, first, last, district, dept, work in rows:
+        ws.append([firm, person, name, p["bids"], p["wins"], round(p["wins"] / p["bids"] * 100, 1) if p["bids"] else None,
+                   round(p["value"]), wpct, bpct, first, last, district, dept, work]
+                  + [v for y in years for v in (p["years"].get(y, [0, 0])[0] or None, p["years"].get(y, [0, 0])[1] or None)])
+    for sheet, field, label in (("By district", "district", "District"), ("By department", "dept", "Department"),
+                                ("By type of work", "work", "Type of work")):
+        ws = wb.create_sheet(sheet)
+        ws.append(["Firm", "Person", label, "Tenders bid", "Tenders won", "Win rate %", "Value won (Rs)"])
+        for key, name, firm, person, p, *_ in rows:
+            for place, (bids, wins, value) in sorted(p[field].items(), key=lambda kv: -kv[1][0]):
+                ws.append([firm, person, place, bids, wins or None, round(wins / bids * 100, 1) if bids else None, round(value) or None])
+    ws = wb.create_sheet("By year")
+    ws.append(["Firm", "Person", "Year", "Tenders bid", "Tenders won", "Win rate %"])
+    for key, name, firm, person, p, *_ in rows:
+        for y, (bids, wins) in sorted(p["years"].items()):
+            if y:
+                ws.append([firm, person, y, bids, wins or None, round(wins / bids * 100, 1) if bids else None])
+    folder = root / "excel"
+    folder.mkdir(parents=True, exist_ok=True)
+    wb.save(folder / "works-bidders.xlsx")
+
+    # Top 50 bidders by wins for every district (and all of Karnataka), overall and per year.
+    leaders = {}
+    for key, name, firm, person, p, *_ in rows:
+        places = {"": [p["bids"], p["wins"], p["value"]], **p["district"]}
+        for place, (bids, wins, value) in places.items():
+            leaders.setdefault(place, {}).setdefault("", []).append([name, bids, wins, round(value)])
+        for y, (bids, wins) in p["years"].items():
+            if y:
+                leaders.setdefault("", {}).setdefault(y, []).append([name, bids, wins, None])
+        for place_year, (bids, wins, value) in p["dy"].items():
+            place, y = place_year.split("|", 1)
+            leaders.setdefault(place, {}).setdefault(y, []).append([name, bids, wins, round(value)])
+    for place, by_year in leaders.items():
+        for y, lst in by_year.items():
+            lst.sort(key=lambda v: (-v[2], -v[1]))
+            by_year[y] = [v for v in lst[:50] if v[1]]
+    (root / "leaders.json").write_text(json.dumps(leaders, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    return {"file": "works-bidders.xlsx", "year": None, "bidders": len(rows), "bytes": (folder / "works-bidders.xlsx").stat().st_size}
 
 
 def write_itemwise(store, root, out):
@@ -483,7 +564,9 @@ def build(history, parts, itemwise_out=None):
     similar = build_similar(results)
     (history / "similar.json").write_text(json.dumps(similar, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     files = write_excel(results, rates, history)
-    contractors = build_contractors(results, history)
+    people = build_contractors(results, history)
+    contractors = len(people)
+    files.append(write_bidder_database(people, history))
     itemwise = write_itemwise(store, history, itemwise_out) if itemwise_out else []
     closed = sorted(r["closed"] for r in results if r.get("closed"))
     (history / "index.json").write_text(json.dumps({

@@ -1017,6 +1017,7 @@
     $('q').placeholder = mode === 'results' ? 'Search results by work, department, town or contractor name…' : 'Search by work, tender number, department or town…';
     if (mode === 'results') {
       loadDownloads();
+      loadLeaders();
       $('rTitle').textContent = 'Loading results…';
       loadResults().then(() => applyResults()).catch((err) => {
         $('rTitle').textContent = 'Results are not available yet';
@@ -1038,6 +1039,40 @@
     const compact = terms.join('');
     return r._names.filter(([, n]) => terms.every((w) => n.includes(w)) || n.replace(/ /g, '').includes(compact)).map(([name]) => name);
   }
+  // Top bidders by wins, for every district and year, from the whole history (leaders.json).
+  let leaders = null;
+  async function loadLeaders() {
+    const box = $('rLeaders');
+    if (leaders === null) {
+      leaders = false;
+      try { const r = await fetch('/leaders.json'); leaders = r.ok ? await r.json() : false; } catch { leaders = false; }
+    }
+    if (!leaders) return;
+    const districts = Object.keys(leaders).filter(Boolean).sort();
+    const years = Object.keys(leaders[''] || {}).filter(Boolean).sort().reverse();
+    box.hidden = false;
+    if (!box.dataset.ready) {
+      box.dataset.ready = '1';
+      box.innerHTML = `<h3>Top bidders <span class="count">since 2023</span></h3>
+        <div class="filter-row lead-filters">
+          <div class="select"><select id="ldDistrict" aria-label="District"><option value="">All of Karnataka</option>${districts.map((d) => `<option>${esc(d)}</option>`).join('')}</select></div>
+          <div class="select"><select id="ldYear" aria-label="Year"><option value="">All years</option>${years.map((y) => `<option>${esc(y)}</option>`).join('')}</select></div>
+        </div>
+        <div id="ldTable"></div>
+        <p class="note">Ranked by tenders won. Tap a name for their full profile. The complete list of every bidder is in the “Bidder database” Excel file below.</p>`;
+      $('ldDistrict').addEventListener('change', renderLeaders);
+      $('ldYear').addEventListener('change', renderLeaders);
+    }
+    renderLeaders();
+  }
+  function renderLeaders() {
+    const list = leaders?.[$('ldDistrict').value]?.[$('ldYear').value] || [];
+    $('ldTable').innerHTML = list.length ? `<div class="table-wrap"><table class="lead">
+      <thead><tr><th>#</th><th>Bidder</th><th class="n">Bid</th><th class="n">Won</th><th class="n">Win rate</th><th class="n">Value won</th></tr></thead>
+      <tbody>${list.slice(0, 25).map(([name, bids, wins, value], i) => `<tr><td>${i + 1}</td><td>${bidderName(name)}</td><td class="n">${fmtInt(bids)}</td><td class="n"><b>${fmtInt(wins)}</b></td><td class="n">${bids ? Math.round(wins / bids * 100) + '%' : ''}</td><td class="n">${value ? money(value) : '—'}</td></tr>`).join('')}</tbody>
+    </table></div>` : '<p class="muted-p">No bids recorded for this choice.</p>';
+  }
+
   // Excel downloads of every awarded works tender since 2023 (collect_history.py).
   let downloadsLoaded = false;
   async function loadDownloads() {
@@ -1057,13 +1092,15 @@
     }
     const mb = (b) => `${(b / 1048576).toFixed(b > 10485760 ? 0 : 1)} MB`;
     const years = idx.files.filter((f) => f.year);
-    const rates = idx.files.find((f) => !f.year);
+    const rates = idx.files.find((f) => f.file === 'works-item-rates.xlsx');
+    const bidderDb = idx.files.find((f) => f.file === 'works-bidders.xlsx');
     box.hidden = false;
     box.innerHTML = `<h3>Download all past works results (Excel) <span class="count">${fmtInt(idx.tenders)} tenders</span></h3>
       <p class="muted-p">Every awarded works tender${idx.from ? ` from ${esc(shortDate.format(new Date(idx.from)))} ${esc(idx.from.slice(0, 4))}` : ''} with the winner and every bidder's amount.${idx.complete ? '' : ' <b>Still collecting older tenders</b> — the files grow every few hours.'}</p>
       <div class="dl-list">
         ${years.map((f) => `<a class="dl" href="/downloads/${esc(f.file)}" download><b>${esc(f.year)}</b><span>${fmtInt(f.tenders)} tenders · ${fmtInt(f.bids)} bids</span><small>${mb(f.bytes)}</small></a>`).join('')}
         ${rates ? `<a class="dl rates" href="/downloads/${esc(rates.file)}" download><b>Item rates</b><span>${fmtInt(rates.items)} BOQ items · past winning rates</span><small>${mb(rates.bytes)}</small></a>` : ''}
+        ${bidderDb ? `<a class="dl rates" href="/downloads/${esc(bidderDb.file)}" download><b>Bidder database</b><span>${fmtInt(bidderDb.bidders)} bidders · bids &amp; wins by year, district, department, type of work</span><small>${mb(bidderDb.bytes)}</small></a>` : ''}
       </div>
       <p class="note">Each year file has two sheets: <b>Tenders</b> (one row per tender) and <b>All bids</b> (one row per bidder). New tenders are compared with this full history on their tender page.</p>
       ${(idx.itemwise || []).length ? `<h3 style="margin-top:18px">Item-wise bids — every bidder's rate for every item</h3>
