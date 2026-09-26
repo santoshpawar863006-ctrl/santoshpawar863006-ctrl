@@ -3,8 +3,8 @@ name: Collect KPPP Results
 on:
   workflow_dispatch:
   schedule:
-    # Every 4 hours: each run adds up to 1,200 newly awarded tenders.
-    - cron: "37 */4 * * *"
+    # Every 2 hours: newly awarded tenders first, then older ones.
+    - cron: "37 */2 * * *"
   push:
     branches:
       - main
@@ -45,11 +45,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/results-lite.json public/rates-lite.json data/results-cache.json data/item-rates-cache.json data/results-state.json
+          git add -A data public/results-lite.json public/rates-lite.json
           if git diff --cached --quiet; then
             echo "No new results."
           else
-            git commit -m "Update KPPP results"
+            # [skip ci]: the website reads this data straight from GitHub, so no redeploy is needed.
+            git commit -m "Update KPPP results [skip ci]"
             git pull --rebase origin main
             git push origin main
           fi

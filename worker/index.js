@@ -4,6 +4,8 @@
 const RAW_BASES = [
   'https://raw.githubusercontent.com/santoshpawar863006-ctrl/santoshpawar863006-ctrl/main/public'
 ];
+// Background collectors keep copies of tender details (data branch) and award details (main).
+const REPO_RAW = 'https://raw.githubusercontent.com/santoshpawar863006-ctrl/santoshpawar863006-ctrl';
 const KPPP_BASE = 'https://kppp.karnataka.gov.in';
 const KPPP_WORKS = KPPP_BASE + '/supplier-registration-service/v1/api/portal-service/works/search-eproc-tenders';
 
@@ -193,14 +195,38 @@ function shapeTender(category, full, files, nitId) {
   };
 }
 
+// The copy collected in the background by collect_details.py, if there is one.
+async function storedDetail(category, nitId) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const response = await fetch(`${REPO_RAW}/data/details/${category}/${nitId}.json`, { signal: controller.signal, cf: { cacheTtl: 300, cacheEverything: true } });
+    if (!response.ok) return null;
+    const stored = await response.json();
+    return stored && stored.full ? stored : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function tenderDetail(category, nitId, ctx) {
   const section = SECTIONS[category];
   if (!section || !/^\d+$/.test(nitId)) return json({ success: false, message: 'Unknown tender.' }, 400);
   const cache = caches.default;
-  const cacheKey = new Request(`https://kppp-detail.local/v2/${category}/${nitId}`);
+  const cacheKey = new Request(`https://kppp-detail.local/v3/${category}/${nitId}`);
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
   let shaped;
+  const stored = await storedDetail(category, nitId);
+  if (stored) {
+    shaped = { ...shapeTender(category, stored.full, [], nitId), checkedAt: stored.fetched || null, changes: list(stored.changes) };
+    delete shaped.files;
+    const response = json(shaped, 200, 'public, max-age=600, s-maxage=600');
+    ctx.waitUntil(cache.put(cacheKey, response.clone()));
+    return response;
+  }
   try {
     shaped = shapeTender(category, await kpppJson(`${nitId}/${section.view}`), [], nitId);
   } catch (fullError) {
@@ -223,9 +249,15 @@ async function tenderFiles(category, nitId, ctx) {
   const section = SECTIONS[category];
   if (!section || !/^\d+$/.test(nitId)) return json({ success: false, message: 'Unknown tender.' }, 400);
   const cache = caches.default;
-  const cacheKey = new Request(`https://kppp-files.local/${category}/${nitId}`);
+  const cacheKey = new Request(`https://kppp-files.local/v2/${category}/${nitId}`);
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
+  const stored = await storedDetail(category, nitId);
+  if (stored && Array.isArray(stored.files)) {
+    const response = json({ success: true, files: shapeTender(category, {}, stored.files, nitId).files }, 200, 'public, max-age=600, s-maxage=600');
+    ctx.waitUntil(cache.put(cacheKey, response.clone()));
+    return response;
+  }
   try {
     const files = await kpppJson(`${nitId}/${section.files}`, { timeoutMs: 45000 });
     const response = json({ success: true, files: shapeTender(category, {}, files, nitId).files }, 200, 'public, max-age=21600, s-maxage=21600');
@@ -252,6 +284,25 @@ async function tenderFile(category, nitId, uuid, name, forceDownload = false) {
       'Cache-Control': 'public, max-age=86400'
     }
   });
+}
+
+// Award details (timeline, officers, every bidder's item rates) saved by collect_results.py.
+async function awardDetail(nitId, ctx) {
+  const cache = caches.default;
+  const cacheKey = new Request(`https://kppp-award.local/v1/${nitId}`);
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+  try {
+    const upstream = await fetch(`${REPO_RAW}/main/data/awards/${nitId}.json`, { cf: { cacheTtl: 3600, cacheEverything: true } });
+    if (!upstream.ok) return json({ success: false, message: 'Award details are not collected for this tender yet.' }, 404, 'public, max-age=300');
+    const response = new Response(upstream.body, {
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=3600, s-maxage=3600', 'Access-Control-Allow-Origin': '*' }
+    });
+    ctx.waitUntil(cache.put(cacheKey, response.clone()));
+    return response;
+  } catch (error) {
+    return json({ success: false, message: 'Award details are unavailable right now.' }, 502);
+  }
 }
 
 function ageHours(value) {
@@ -331,6 +382,8 @@ export default {
     if (url.pathname === '/api/system_health') return systemHealth(ctx, env);
     const detail = url.pathname.match(/^\/api\/tender\/(WORKS|GOODS|SERVICES)\/(\d+)$/);
     if (detail) return tenderDetail(detail[1], detail[2], ctx);
+    const award = url.pathname.match(/^\/api\/award\/(\d+)$/);
+    if (award) return awardDetail(award[1], ctx);
     const fileList = url.pathname.match(/^\/api\/tender-files\/(WORKS|GOODS|SERVICES)\/(\d+)$/);
     if (fileList) return tenderFiles(fileList[1], fileList[2], ctx);
     const file = url.pathname.match(/^\/api\/tender-file\/(WORKS|GOODS|SERVICES)\/(\d+)\/([0-9a-fA-F-]+)$/);

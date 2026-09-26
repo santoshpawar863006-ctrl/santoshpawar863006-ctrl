@@ -91,17 +91,17 @@
     apply();
   }
 
-  async function readCache() {
+  async function readCache(url = DATA_URL) {
     try {
       const cache = await caches.open(CACHE_NAME);
-      const hit = await cache.match(DATA_URL);
+      const hit = await cache.match(url);
       return hit ? await hit.json() : null;
     } catch { return null; }
   }
-  async function writeCache(text) {
+  async function writeCache(text, url = DATA_URL) {
     try {
       const cache = await caches.open(CACHE_NAME);
-      await cache.put(DATA_URL, new Response(text, { headers: { 'Content-Type': 'application/json' } }));
+      await cache.put(url, new Response(text, { headers: { 'Content-Type': 'application/json' } }));
     } catch {}
   }
 
@@ -433,7 +433,7 @@
   }
 
   function loadingBlock() {
-    return `<section class="panel"><h3>Loading full details from KPPP…</h3><div class="skeleton line"></div><div class="skeleton line"></div><div class="skeleton line short"></div></section>`;
+    return `<section class="panel"><h3>Loading full details…</h3><div class="skeleton line"></div><div class="skeleton line"></div><div class="skeleton line short"></div></section>`;
   }
 
   async function loadFull(t) {
@@ -532,7 +532,7 @@
       ['Office', esc(t.office)]
     ].filter(([, v]) => v);
 
-    const files = `<section class="panel" id="tpFiles"><h3>Tender documents</h3><p class="muted-p">Loading documents from KPPP… this can take up to half a minute.</p></section>`;
+    const files = `<section class="panel" id="tpFiles"><h3>Tender documents</h3><p class="muted-p">Loading documents…</p></section>`;
 
     const eligibility = f.eligibility.length ? `<section class="panel"><h3>Who is eligible <span class="count">${f.eligibility.length}</span></h3>
       <ol class="rules">${f.eligibility.map((x) => `<li>${esc(x)}</li>`).join('')}</ol></section>` : '';
@@ -571,9 +571,21 @@
       }).join('')}
     </section>` : '';
 
+    const fieldText = (field, v) => {
+      if (field === 'Documents') return `${v} files`;
+      if (/EMD|fee|value/i.test(field)) return money(Number(v), { full: true }) || String(v);
+      return fmtKppp(v) || String(v);
+    };
+    const changes = (f.changes || []).slice().reverse();
+    const changesHtml = changes.length ? `<section class="panel changes"><h3>Changed by the department <span class="count">${changes.length}</span></h3>
+      <ul class="change-list">${changes.map((c) => `<li><b>${esc(c.field)}</b><span><s>${esc(fieldText(c.field, c.from))}</s> → <strong>${esc(fieldText(c.field, c.to))}</strong></span><small>Noticed ${esc(ago(c.at) || '')}</small></li>`).join('')}</ul>
+      <p class="note">Check the corrigendum on KPPP for the full notice.</p></section>` : '';
+
     $('tpFull').innerHTML = `
+      ${changesHtml}
       <section class="panel"><h3>Tender details</h3><dl class="facts">${terms.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></section>
-      ${files}${eligibility}${technical}${docs}${items}`;
+      ${files}${eligibility}${technical}${docs}${items}
+      ${f.checkedAt ? `<p class="note">Details copied from KPPP ${esc(ago(f.checkedAt) || '')} and re-checked every few hours.</p>` : ''}`;
     if (t.cat === 'WORKS' && itemCount) annotateRates(t, f);
     loadFiles(t);
     if (f.partial) {
@@ -591,7 +603,7 @@
     d.classList.remove('open');
     d.setAttribute('aria-hidden', 'true');
     document.body.style.overflow = '';
-    if (!fromHistory && /^#[tc]=/.test(location.hash)) history.back();
+    if (!fromHistory && /^#[tca]=/.test(location.hash)) history.back();
     lastFocus?.focus?.();
   }
 
@@ -661,27 +673,51 @@
   const pctText = (p) => (p === null || p === undefined ? '—' : `${Math.abs(p).toFixed(1)}% ${p < 0 ? 'below' : p > 0 ? 'above' : 'at'} estimate`);
   const winPct = (r) => r.bidders?.[0]?.pct ?? null;
 
+  const RESULTS_URL = '/results-lite.json';
+  function ingestResults(d) {
+    R.generatedAt = d.generated_at || null;
+    R.all = (d.results || []).map((r) => {
+      r._award = r.awarded ? Date.parse(r.awarded) : (r.closed ? Date.parse(r.closed) : 0);
+      r._hay = [r.title, r.ref, r.dept, r.office, r.district, r.work, r.winner, ...(r.bidders || []).map((b) => b.name)].filter(Boolean).join(' ').toLowerCase();
+      return r;
+    });
+    R.byNit = new Map(R.all.map((r) => [r.nit, r]));
+    const fill = (id, label, key) => {
+      const counts = new Map();
+      for (const r of R.all) if (r[key]) counts.set(r[key], (counts.get(r[key]) || 0) + 1);
+      const sel = $(id);
+      const current = sel.value;
+      sel.innerHTML = `<option value="">${label}</option>` + [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([v, c]) => `<option value="${esc(v)}">${esc(v)} (${fmtInt(c)})</option>`).join('');
+      if (current && counts.has(current)) sel.value = current;
+    };
+    fill('rDistrict', 'All districts', 'district');
+    fill('rDept', 'All departments', 'dept');
+    fill('rWork', 'All types of work', 'work');
+    return R.all;
+  }
+
+  // Like the tenders: show the copy saved in the browser at once, then swap in the fresh one.
   function loadResults() {
     if (!R.loading) {
-      R.loading = fetch('/results-lite.json', { cache: 'no-cache' })
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-        .then((d) => {
-          R.all = (d.results || []).map((r) => {
-            r._award = r.awarded ? Date.parse(r.awarded) : (r.closed ? Date.parse(r.closed) : 0);
-            r._hay = [r.title, r.ref, r.dept, r.office, r.district, r.work, r.winner, ...(r.bidders || []).map((b) => b.name)].filter(Boolean).join(' ').toLowerCase();
-            return r;
-          });
-          const fill = (id, label, key) => {
-            const counts = new Map();
-            for (const r of R.all) if (r[key]) counts.set(r[key], (counts.get(r[key]) || 0) + 1);
-            $(id).innerHTML = `<option value="">${label}</option>` + [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([v, c]) => `<option value="${esc(v)}">${esc(v)} (${fmtInt(c)})</option>`).join('');
-          };
-          fill('rDistrict', 'All districts', 'district');
-          fill('rDept', 'All departments', 'dept');
-          fill('rWork', 'All types of work', 'work');
+      R.loading = (async () => {
+        const network = fetch(RESULTS_URL, { cache: 'no-cache' })
+          .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))));
+        const cached = await readCache(RESULTS_URL);
+        const refresh = network.then((text) => {
+          const fresh = JSON.parse(text);
+          if (!cached || cached.generated_at !== fresh.generated_at) {
+            ingestResults(fresh);
+            if (cached && R.mode === 'results') applyResults({ keepPage: true });
+          }
+          writeCache(text, RESULTS_URL);
           return R.all;
-        })
-        .catch((err) => { R.loading = null; throw err; });
+        });
+        if (cached?.results?.length) {
+          refresh.catch(() => {});
+          return ingestResults(cached);
+        }
+        return refresh;
+      })().catch((err) => { R.loading = null; throw err; });
     }
     return R.loading;
   }
@@ -695,7 +731,7 @@
     $('q').placeholder = mode === 'results' ? 'Search results by work, department, town or contractor name…' : 'Search by work, tender number, department or town…';
     if (mode === 'results') {
       $('rTitle').textContent = 'Loading results…';
-      loadResults().then(applyResults).catch((err) => {
+      loadResults().then(() => applyResults()).catch((err) => {
         $('rTitle').textContent = 'Results are not available yet';
         $('rList').innerHTML = `<div class="empty"><strong>Past results are still being collected.</strong>Please check again later. (${esc(err.message)})</div>`;
       });
@@ -722,8 +758,9 @@
     };
   }
 
-  function applyResults() {
+  function applyResults({ keepPage = false } = {}) {
     if (!R.all) return;
+    const keep = keepPage ? Math.max(R.shown, PAGE) : 0;
     const f = { q: R.q, cat: $('rCat').value, district: $('rDistrict').value, dept: $('rDept').value, work: $('rWork').value };
     const list = filterResults(f);
     const sort = $('rSort').value;
@@ -745,6 +782,35 @@
     for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork']) $(id).classList.toggle('set', Boolean($(id).value));
     $('rList').innerHTML = '';
     moreResults();
+    while (R.shown < Math.min(keep, R.filtered.length)) moreResults();
+  }
+
+  // "NAME (1)( FIRM NAME )" → firm and person, the way KPPP writes bidders.
+  function splitName(n) {
+    const text = String(n || '').trim();
+    const m = text.match(/^(.*?)\s*(?:\(\s*\d+\s*\)\s*)?\(\s*(.+?)\s*\)\s*$/);
+    return m && m[1] && m[2] ? { firm: m[2], person: m[1].replace(/\s*\(\s*\d+\s*\)\s*$/, '') } : { firm: text.replace(/\s*\(\s*\d+\s*\)\s*$/, ''), person: '' };
+  }
+  function bidderName(n) {
+    const { firm, person } = splitName(n);
+    return `<button type="button" class="linkish" data-win="${esc(n)}">${esc(firm)}</button>${person ? `<small class="who">${esc(person)}</small>` : ''}`;
+  }
+  const signed = (p, digits = 2) => (p === null || p === undefined ? '' : `${p > 0 ? '+' : ''}${p.toFixed(digits)}%`);
+
+  // Every bidder with the gap to the winning (L1) bid.
+  function bidderTable(r) {
+    const l1 = r.bidders.find((b) => b.rank === 1)?.amount || null;
+    const goods = r.cat === 'GOODS';
+    return `<div class="table-wrap"><table class="bids"><thead><tr><th>Rank</th><th>Bidder</th><th class="n">Quoted amount</th><th class="n">vs estimate</th><th class="n">Gap to L1</th>${goods ? '<th class="n">Items won</th>' : ''}</tr></thead><tbody>
+      ${r.bidders.map((b) => {
+        const gap = l1 && b.amount && b.rank !== 1 ? b.amount - l1 : null;
+        return `<tr${b.rank === 1 ? ' class="l1"' : ''}><td>${b.rank ? 'L' + b.rank : '—'}</td><td>${bidderName(b.name)}</td>
+          <td class="n">${b.amount ? money(b.amount, { full: true }) : '<small>Not all items</small>'}</td>
+          <td class="n">${signed(b.pct)}</td>
+          <td class="n">${gap !== null ? `${money(gap) || '₹0'}<small>${(gap / l1 * 100).toFixed(2)}% higher</small>` : (b.rank === 1 ? '<small>Winner</small>' : '')}</td>
+          ${goods ? `<td class="n">${b.items || 0}</td>` : ''}</tr>`;
+      }).join('')}
+    </tbody></table></div>`;
   }
 
   function resultRow(r) {
@@ -769,9 +835,8 @@
       </summary>
       <div class="rbody">
         <p class="ref">${esc(r.ref)}${num(r.value) ? ` · Estimate ${money(r.value, { full: true })}` : ''}${r.office ? ` · ${esc(r.office)}` : ''}</p>
-        ${r.bidders?.length ? `<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Bidder</th><th class="n">Quoted amount</th><th class="n">vs estimate</th></tr></thead><tbody>
-          ${r.bidders.map((b) => `<tr${b.rank === 1 ? ' class="l1"' : ''}><td>${b.rank ? 'L' + b.rank : ''}</td><td><button type="button" class="linkish" data-win="${esc(b.name)}">${esc(b.name)}</button></td><td class="n">${b.amount ? money(b.amount, { full: true }) : ''}</td><td class="n">${b.pct === null || b.pct === undefined ? '' : (b.pct > 0 ? '+' : '') + b.pct.toFixed(2) + '%'}</td></tr>`).join('')}
-        </tbody></table></div>` : '<p class="note">KPPP has not published the bid comparison for this tender.</p>'}
+        ${r.bidders?.length ? bidderTable(r) : '<p class="note">KPPP has not published the bid comparison for this tender.</p>'}
+        <div><button class="btn primary" type="button" data-award="${esc(r.nit)}">Full result · timeline &amp; item-wise rates</button></div>
       </div>
     </details>`;
   }
@@ -830,6 +895,129 @@
         window.scrollTo({ top: $('resultsView').offsetTop - 10 });
       });
     });
+  }
+
+  // ---------- Award page: timeline, officers and every bidder's item rates ----------
+  const awardCache = new Map();
+  function daysBetween(a, b) {
+    const d = (Date.parse(b) - Date.parse(a)) / DAY;
+    return Number.isFinite(d) ? Math.round(d) : null;
+  }
+
+  async function openAward(nit) {
+    try { await loadResults(); } catch { toast('Past results are not available yet'); return; }
+    const r = R.byNit?.get(String(nit));
+    if (!r) { toast('This result is not in our records yet'); return; }
+    lastFocus = document.activeElement;
+    const p = winPct(r);
+    const l1 = r.bidders?.find((b) => b.rank === 1);
+    const l2 = r.bidders?.find((b) => b.rank === 2);
+    const w = splitName(r.winner);
+    const place = [r.office, r.district].filter(Boolean).join(' · ');
+    const d = $('drawer');
+    d.innerHTML = `
+      <div class="tp-bar"><div class="wrap tp-bar-in">
+        <button class="btn ghost" type="button" data-close>${icon.back} Back to results</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-copy="${esc(r.ref)}">Copy tender no.</button>
+      </div></div>
+      <header class="tp-hero"><div class="wrap">
+        <div class="row"><span class="badge ${esc(r.cat)}">${esc(r.cat)}</span><span class="badge soft">Awarded${r._award ? ' ' + esc(shortDate.format(new Date(r._award))) : ''}</span>${r.work ? `<span class="badge soft">${esc(r.work)}</span>` : ''}</div>
+        <h2 id="dTitle">${esc(r.title)}</h2>
+        <p class="tp-sub">${esc(r.dept || '')}${place ? ` · ${esc(place)}` : ''}</p>
+        <p class="ref">${esc(r.ref)}</p>
+      </div></header>
+      <div class="wrap cp">
+        <div class="cp-kpis">
+          <div class="kpi"><span>Winner</span><strong class="win-name">${r.winner ? `<button type="button" class="linkish" data-contractor="${esc(r.winner)}">${esc(w.firm)}</button>` : 'Not published'}</strong><small>${esc(w.person)}</small></div>
+          <div class="kpi"><span>Winning bid</span><strong>${l1?.amount ? money(l1.amount) : '—'}</strong><small>${p !== null ? esc(pctText(p)) : (num(r.value) ? `Estimate ${money(r.value)}` : '')}</small></div>
+          <div class="kpi"><span>Bidders</span><strong>${r.bidders?.length || '—'}</strong><small>${num(r.value) ? `Estimate ${money(r.value, { full: true })}` : ''}</small></div>
+          <div class="kpi"><span>Won by</span><strong>${l1?.amount && l2?.amount ? money(l2.amount - l1.amount) || '₹0' : '—'}</strong><small>${l1?.amount && l2?.amount ? `${((l2.amount - l1.amount) / l2.amount * 100).toFixed(2)}% less than L2` : 'gap to the second bidder'}</small></div>
+        </div>
+        ${r.bidders?.length ? `<section class="panel"><h3>All bids <span class="count">${r.bidders.length}</span></h3>${bidderTable(r)}</section>` : ''}
+        <div id="awardMore"><section class="panel"><h3>Loading timeline and item-wise rates…</h3><div class="skeleton line"></div><div class="skeleton line short"></div></section></div>
+      </div>`;
+    d.setAttribute('aria-hidden', 'false');
+    d.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    d.scrollTop = 0;
+    d.querySelector('[data-close]').focus();
+    const hash = '#a=' + encodeURIComponent(r.nit);
+    if (location.hash !== hash) history.pushState({ award: r.nit }, '', hash);
+
+    const box = $('awardMore');
+    try {
+      if (!awardCache.has(r.nit)) {
+        awardCache.set(r.nit, fetch(`/api/award/${encodeURIComponent(r.nit)}`).then((x) => (x.ok ? x.json() : Promise.reject(new Error(`HTTP ${x.status}`)))));
+      }
+      const a = await awardCache.get(r.nit);
+      if ($('awardMore') !== box) return;
+      box.innerHTML = awardDetailsHtml(r, a);
+      box.querySelectorAll('.show-rows').forEach((b) => b.addEventListener('click', () => {
+        box.querySelectorAll('.more-row').forEach((row) => { row.hidden = false; });
+        b.remove();
+      }));
+    } catch {
+      awardCache.delete(r.nit);
+      if ($('awardMore') === box) box.innerHTML = '<section class="panel"><h3>Timeline and item-wise rates</h3><p class="muted-p">These details are still being collected for this tender. Please check again in a few hours.</p></section>';
+    }
+  }
+
+  function awardDetailsHtml(r, a) {
+    const t = a.timeline || {};
+    const steps = [
+      ['Published', t.published],
+      ['Bids closed', t.closed || r.closed],
+      ['Technical bids opened', t.techOpened],
+      ['Technical evaluation approved', t.techApproved],
+      ['Price bids opened', t.finOpened],
+      ['Price evaluation approved', t.finApproved],
+      ['Winner gave performance guarantee', t.pbg],
+      ['Work awarded', t.awarded || r.awarded]
+    ].filter(([, v]) => v && Number.isFinite(Date.parse(v)));
+    const closedToAward = daysBetween(t.closed || r.closed, t.awarded || r.awarded);
+    const timeline = steps.length ? `<section class="panel"><h3>Timeline${closedToAward !== null ? ` <span class="count">${closedToAward} days from closing to award</span>` : ''}</h3>
+      <ol class="timeline">${steps.map(([label, v], i) => {
+        const gap = i ? daysBetween(steps[i - 1][1], v) : null;
+        return `<li><b>${esc(label)}</b><span>${esc(dateFmt.format(new Date(v)))}${gap ? ` · <em>${gap} day${gap === 1 ? '' : 's'} later</em>` : ''}</span></li>`;
+      }).join('')}</ol></section>` : '';
+
+    const pp = a.people || {};
+    const people = [
+      ['Published by', pp.publishedBy], ['Price bids opened by', pp.opener], ['Result approved by', pp.approver],
+      ['Technical approval by', pp.techApprover !== pp.approver ? pp.techApprover : ''], ['Contact', [pp.contact, pp.mobile].filter(Boolean).join(' · ')]
+    ].filter(([, v]) => v);
+    const facts = [
+      ['EMD', num(a.emd) ? money(a.emd, { full: true }) : ''], ['Tender fee', num(a.fee) ? money(a.fee, { full: true }) : ''],
+      ['Evaluation', a.evaluation], ['Bid type', a.bidType], ['Call', a.call ? `Call ${a.call}` : '']
+    ].filter(([, v]) => v);
+    const officers = people.length || facts.length ? `<section class="panel"><h3>Officers &amp; terms</h3><dl class="facts">
+      ${[...people, ...facts].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
+      ${a.description && a.description !== r.title ? `<p class="muted-p" style="margin-top:12px">${esc(a.description)}</p>` : ''}</section>` : '';
+
+    const items = a.items || [];
+    const bidders = a.bidders?.length ? a.bidders : (r.bidders || []);
+    let itemsHtml = '';
+    if (items.length && bidders.length) {
+      const cols = bidders.slice(0, 6);
+      const head = cols.map((b) => `<th class="n">${b.rank ? `L${b.rank} · ` : ''}${esc(splitName(b.name).firm)}</th>`).join('');
+      itemsHtml = `<section class="panel"><h3>Item-wise rates of every bidder <span class="count">${fmtInt(items.length)} items</span></h3>
+        <p class="note" style="margin:0 0 10px">Rate quoted per unit. Green is the lowest rate for that item; % is against the department's rate.</p>
+        <div class="table-wrap"><table class="irates"><thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Dept. rate</th>${head}</tr></thead><tbody>
+        ${items.map((i, n) => {
+          const rates = cols.map((_, k) => i.rates?.[k]);
+          const low = Math.min(...rates.filter((x) => typeof x === 'number' && x > 0));
+          return `<tr${n >= 15 ? ' class="more-row" hidden' : ''}><td><div class="item-name">${esc(i.name)}</div><small>${esc([i.code, i.unit].filter(Boolean).join(' · '))}${i.winner ? ` · supplied by ${esc(splitName(i.winner).firm)}` : ''}</small></td>
+            <td class="n">${i.qty ?? ''}</td><td class="n">${i.est ? money(i.est, { full: true }) : ''}</td>
+            ${rates.map((x) => `<td class="n${x === low ? ' low' : ''}">${typeof x === 'number' ? money(x, { full: true }) || '₹0' : '—'}${typeof x === 'number' && i.est ? `<small>${signed((x / i.est - 1) * 100, 1)}</small>` : ''}</td>`).join('')}
+          </tr>`;
+        }).join('')}</tbody></table></div>
+        ${items.length > 15 ? `<button class="btn ghost show-rows" type="button">Show all ${fmtInt(items.length)} items</button>` : ''}
+        ${bidders.length > cols.length ? `<p class="note">Showing the first ${cols.length} bidders.</p>` : ''}</section>`;
+    } else if (r.cat === 'WORKS' || r.cat === 'GOODS') {
+      itemsHtml = '<section class="panel"><h3>Item-wise rates</h3><p class="muted-p">KPPP has not published item-wise rates for this tender.</p></section>';
+    }
+    return `<div class="cp-grid">${timeline}${officers}</div>${itemsHtml}`;
   }
 
   // ---------- Item-wise past rates ----------
@@ -977,7 +1165,7 @@
           <thead><tr><th>Awarded</th><th>Tender</th><th>Result</th><th class="n">Their bid</th><th class="n">vs estimate</th></tr></thead>
           <tbody>${rows.slice(0, 200).map((x) => `<tr${x.won ? ' class="l1"' : ''}>
             <td>${x.r._award ? esc(shortDate.format(new Date(x.r._award))) : ''}</td>
-            <td><div class="item-name">${esc(x.r.title)}</div><small>${esc([x.r.district, x.r.dept].filter(Boolean).join(' · '))}</small></td>
+            <td><button type="button" class="linkish item-name" data-award="${esc(x.r.nit)}">${esc(x.r.title)}</button><small>${esc([x.r.district, x.r.dept].filter(Boolean).join(' · '))}</small></td>
             <td>${x.won ? '<b>Won</b>' : x.mine?.rank ? `L${x.mine.rank}` : ''}${!x.won && x.r.winner ? `<small>Winner: <button type="button" class="linkish" data-contractor="${esc(x.r.winner)}">${esc(x.r.winner)}</button></small>` : ''}</td>
             <td class="n">${x.mine?.amount ? money(x.mine.amount) : ''}</td>
             <td class="n">${x.mine?.pct === null || x.mine?.pct === undefined ? '' : (x.mine.pct > 0 ? '+' : '') + x.mine.pct.toFixed(1) + '%'}</td>
@@ -1102,13 +1290,15 @@
   setView(readJSON(VIEW_KEY, 'cards'));
   document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
   document.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
-  for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork', 'rSort']) $(id).addEventListener('change', applyResults);
+  for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork', 'rSort']) $(id).addEventListener('change', () => applyResults());
   $('rMore').addEventListener('click', moreResults);
   $('rReset').addEventListener('click', () => {
     for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork']) $(id).value = '';
     $('rSort').value = 'new'; R.q = ''; $('q').value = ''; applyResults();
   });
   $('resultsView').addEventListener('click', (e) => {
+    const aw = e.target.closest('[data-award]');
+    if (aw) { e.preventDefault(); openAward(aw.dataset.award); return; }
     const w = e.target.closest('[data-win]');
     if (!w) return;
     e.preventDefault();
@@ -1134,6 +1324,10 @@
     const copy = e.target.closest('[data-copy]');
     if (copy) { navigator.clipboard?.writeText(copy.dataset.copy).then(() => toast('Tender number copied')); return; }
     if (e.target.closest('#drawer [data-close]')) { closeDrawer(); return; }
+    const aw = e.target.closest('#drawer [data-award]');
+    if (aw) { e.preventDefault(); openAward(aw.dataset.award); return; }
+    const bw = e.target.closest('#drawer [data-win]');
+    if (bw) { e.preventDefault(); openContractor(bw.dataset.win); return; }
     const who = e.target.closest('[data-contractor]');
     if (who) { e.preventDefault(); openContractor(who.dataset.contractor); return; }
     const c = e.target.closest('.card');
@@ -1147,8 +1341,10 @@
   window.addEventListener('popstate', () => {
     const m = location.hash.match(/^#t=(.+)$/);
     const c = location.hash.match(/^#c=(.+)$/);
+    const a = location.hash.match(/^#a=(\d+)$/);
     if (m && S.byId.has(decodeURIComponent(m[1]))) openTender(decodeURIComponent(m[1]));
     else if (c) openContractor(decodeURIComponent(c[1]));
+    else if (a) openAward(a[1]);
     else closeDrawer({ fromHistory: true });
   });
 
@@ -1160,11 +1356,18 @@
 
 
   const deepContractor = location.hash.match(/^#c=(.+)$/);
+  const deepAward = location.hash.match(/^#a=(\d+)$/);
   if (deepContractor) {
     history.replaceState(null, '', location.pathname);
     openContractor(decodeURIComponent(deepContractor[1]));
+  } else if (deepAward) {
+    history.replaceState(null, '', location.pathname);
+    openAward(deepAward[1]);
   }
   load().then(() => {
+    // Get past results ready in the background so the "Past results" tab opens instantly.
+    const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
+    idle(() => loadResults().catch(() => {}));
     const m = location.hash.match(/^#t=(.+)$/);
     if (m && S.byId.has(decodeURIComponent(m[1]))) {
       history.replaceState(null, '', location.pathname);

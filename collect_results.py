@@ -5,8 +5,11 @@ For each awarded tender KPPP publishes, without a login:
   * for WORKS, a "Comparative Statement" spreadsheet with every bidder's
     total quoted amount, rank (L1, L2 ...) and % against the estimate.
 
+  * for GOODS, a similar statement with every supplier's price per item.
+
 Results never change once awarded, so each tender is fetched once and kept in
-data/results-cache.json; each run only looks up newly awarded tenders.
+data/results-cache.json (the list) and data/awards/{nitId}.json (the award page: timeline,
+officers and every bidder's item rates); each run only looks up newly awarded tenders.
 """
 
 import io
@@ -26,20 +29,23 @@ from urllib3.util.retry import Retry
 from build_lite import district_of, iso_ist, positive
 
 CACHE = Path("data/results-cache.json")
+# Older runs kept every tender's item rates in one file; they now live in data/awards/.
 ITEMS_CACHE = Path("data/item-rates-cache.json")
+AWARDS = Path("data/awards")
 TARGET = Path("public/results-lite.json")
 RATES = Path("public/rates-lite.json")
 API = "https://kppp.karnataka.gov.in/supplier-registration-service/v1/api/portal-service"
 SEARCH = {"WORKS": "works/search-eproc-tenders", "GOODS": "search-eproc-tenders", "SERVICES": "services/search-eproc-tenders"}
 FULL_VIEW = {"WORKS": "works-tender-full-view", "GOODS": "goods-tender-full-view", "SERVICES": "service-tender-full-view"}
 
-# Pages of 100 awarded tenders (newest first) to list per run. KPPP takes ~40s per page, so this
-# is kept small; each run first catches up on newly awarded tenders, then spends what is left on
-# older pages, continuing from where the last run stopped (data/results-state.json).
-LIST_PAGES = {"WORKS": int(os.getenv("RESULTS_WORKS_PAGES", "6")),
-              "GOODS": int(os.getenv("RESULTS_GOODS_PAGES", "1")),
-              "SERVICES": int(os.getenv("RESULTS_SERVICES_PAGES", "1"))}
-MAX_LOOKUPS = int(os.getenv("RESULTS_MAX_LOOKUPS", "1200"))
+# Pages of 100 awarded tenders (newest first) to list per run. Each run first catches up on
+# newly awarded tenders, then spends what is left on older pages, continuing from where the
+# last run stopped (data/results-state.json). KPPP can take up to ~40s a page on bad days;
+# the time budget below keeps the run safe then.
+LIST_PAGES = {"WORKS": int(os.getenv("RESULTS_WORKS_PAGES", "20")),
+              "GOODS": int(os.getenv("RESULTS_GOODS_PAGES", "6")),
+              "SERVICES": int(os.getenv("RESULTS_SERVICES_PAGES", "6"))}
+MAX_LOOKUPS = int(os.getenv("RESULTS_MAX_LOOKUPS", "3000"))
 # Stop listing / starting lookups after this many seconds (from the start of the run) so the
 # run always finishes and saves what it has.
 TIME_BUDGET = int(os.getenv("RESULTS_TIME_BUDGET", "1200"))
@@ -173,31 +179,144 @@ def parse_statement(content):
     return bidders, items
 
 
+def parse_goods_statement(content):
+    """Suppliers and their price per item from a GOODS comparative statement.
+
+    Layout: supplier names sit above their "Item Price" columns; "Item Rate" is the department's
+    rate and "Selected Supplier By Approver" names who got each item. There is no totals row, so a
+    supplier's total is worked out from the items (only for suppliers who priced every item).
+    """
+    rows = [list(r) for r in load_workbook(io.BytesIO(content)).worksheets[0].iter_rows(values_only=True)]
+    text = lambda v: clean(v).lower()
+    header_at = next(i for i, r in enumerate(rows) if r and text(r[0]).startswith(("sl. no", "sl.no", "sno")))
+    header = [text(v) for v in rows[header_at]]
+    col = {name: header.index(name) for name in ("item name", "item code", "unit", "item rate", "quantity",
+                                                 "selected supplier by approver") if name in header}
+    price_cols = [j for j, h in enumerate(header) if h == "item price"]
+    names_row = rows[header_at - 1] if header_at else []
+    names = [clean(names_row[j]) if j < len(names_row) else "" for j in price_cols]
+    keep = [k for k, n in enumerate(names) if n]
+    price_cols, names = [price_cols[k] for k in keep], [names[k] for k in keep]
+
+    items = []
+    for r in rows[header_at + 1:]:
+        get = lambda name: r[col[name]] if name in col and col[name] < len(r) else None
+        name, code, unit = clean(get("item name")), clean(get("item code")), clean(get("unit"))
+        qty, est = num(get("quantity")), num(get("item rate"))
+        if not name:
+            continue
+        rates = [num(r[j]) if j < len(r) else None for j in price_cols]
+        items.append({"key": item_key(code, name, unit), "code": code, "name": name[:140], "unit": unit,
+                      "qty": qty, "est": est, "rates": rates, "winner": clean(get("selected supplier by approver")) or None})
+    if not names or not items:
+        return [], []
+
+    bidders = []
+    for k, bidder in enumerate(names):
+        priced = [i for i in items if i["rates"][k] is not None and i["qty"]]
+        full = len(priced) == len(items)
+        bidders.append({"name": bidder, "amount": round(sum(i["rates"][k] * i["qty"] for i in priced), 2) if full else None,
+                        "items": sum(1 for i in items if i["winner"] == bidder)})
+    ranked = sorted((b for b in bidders if b["amount"]), key=lambda b: b["amount"])
+    for n, b in enumerate(ranked, 1):
+        b["rank"] = n
+    order = sorted(range(len(bidders)), key=lambda k: (bidders[k].get("rank") is None, bidders[k].get("rank") or 0, -bidders[k]["items"]))
+    bidders = [{key: v for key, v in bidders[k].items() if v not in (None, 0) or key == "rank"} for k in order]
+    for item in items:
+        item["rates"] = [item["rates"][k] for k in order]
+    return bidders, items
+
+
 def fetch_statement(session, category, nit):
+    if category not in ("WORKS", "GOODS"):
+        return [], []
     sheet = session.get(
         f"{API}/tender-eval/{nit}/commercial-evaluation/tender-category/{category}/commercial-comparison/download-detailed",
         headers={**HEADERS, "Accept": "*/*"}, timeout=60)
     if sheet.status_code != 200 or sheet.content[:2] != b"PK":
         return [], []
     try:
-        return parse_statement(sheet.content)
+        return (parse_statement if category == "WORKS" else parse_goods_statement)(sheet.content)
     except Exception:
         return [], []
 
 
-def lookup(session, category, raw):
-    nit = raw.get("nitId")
+def ms_iso(ms):
+    try:
+        return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds") if ms else None
+    except Exception:
+        return None
+
+
+def full_view(session, category, nit):
     full = session.get(f"{API}/{nit}/{FULL_VIEW[category]}", headers=HEADERS, timeout=40)
     full.raise_for_status()
-    detail = full.json() or {}
+    return full.json() or {}
+
+
+def award_page(nit, category, detail, bidders, items):
+    """What the award page shows beyond the results list: timeline, officers and item rates."""
     award = detail.get("tenderAwardDatesDTO") or {}
-    winners = [clean(w.get("name")) for w in award.get("listOfBidderDonePBGDTO") or [] if w.get("name")]
-    bidders, items = fetch_statement(session, category, nit) if category == "WORKS" else ([], [])
+    stages = detail.get("evalStagesCompletedInfoDTO") or {}
+    notice = detail.get("noticeInvitingTenderDTO") or {}
+    sched = detail.get("tenderSchedule") or {}
+    pbg = [{"name": clean(w.get("name")), "date": ms_iso(w.get("date"))} for w in award.get("listOfBidderDonePBGDTO") or [] if w.get("name")]
+    timeline = {
+        "published": iso_ist(notice.get("publishedDate")),
+        "closed": iso_ist(notice.get("tenderReceiptClose")),
+        "techOpened": iso_ist(notice.get("technicalBidOpen")),
+        "techApproved": ms_iso(stages.get("technicalQualificationProcessApprovedDate")),
+        "finOpened": ms_iso(stages.get("commercialQualificationProcessOpenDate")),
+        "finApproved": ms_iso(stages.get("commercialQualificationProcessApprovedDate")),
+        "pbg": pbg[0]["date"] if pbg else None,
+        "awarded": ms_iso(award.get("awardedDates")),
+    }
+    people = {
+        "publishedBy": clean(re.sub(r"^\S+\s+-\s+", "", str(notice.get("publishedByUser") or ""))),
+        "techApprover": clean(stages.get("technicalQualificationProcessApprover")),
+        "opener": clean(stages.get("commercialQualificationProcessOpenBy")),
+        "approver": clean(stages.get("commercialQualificationProcessApprover")),
+        "contact": clean(notice.get("contactPerson")),
+        "mobile": clean(notice.get("mobileNumber") or notice.get("officeNumber")),
+    }
+    record = {
+        "nit": str(nit), "cat": category,
+        "description": clean(sched.get("description")),
+        "evaluation": clean(notice.get("evaluationTypeText")),
+        "bidType": clean(notice.get("bidValueTypeText")),
+        "call": notice.get("noOfCalls"),
+        "emd": positive(notice.get("emd")), "fee": positive(notice.get("tenderFee")),
+        "timeline": {k: v for k, v in timeline.items() if v},
+        "people": {k: v for k, v in people.items() if v},
+        "pbg": pbg,
+        "bidders": bidders,
+        "items": items,
+    }
+    return {k: v for k, v in record.items() if v not in (None, "", [], {})}
+
+
+def with_pct(bidders, estimate):
     # KPPP's own "% against Estimated Rate" is taken against a double-counted
     # estimate, so work it out from the tender's estimated contract value.
-    estimate = positive(raw.get("ecv"))
     for bidder in bidders:
         bidder["pct"] = round((bidder["amount"] / estimate - 1) * 100, 2) if estimate and bidder.get("amount") else None
+    return bidders
+
+
+def goods_estimate(items):
+    if items and all(i.get("est") and i.get("qty") for i in items):
+        return sum(i["est"] * i["qty"] for i in items)
+    return None
+
+
+def lookup(session, category, raw):
+    nit = raw.get("nitId")
+    detail = full_view(session, category, nit)
+    award = detail.get("tenderAwardDatesDTO") or {}
+    winners = [clean(w.get("name")) for w in award.get("listOfBidderDonePBGDTO") or [] if w.get("name")]
+    bidders, items = fetch_statement(session, category, nit)
+    estimate = positive(raw.get("ecv")) if category == "WORKS" else (goods_estimate(items) or positive(raw.get("ecv")))
+    with_pct(bidders, estimate)
     awarded_ms = award.get("awardedDates")
     office = clean(raw.get("locationName"))
     title = clean(raw.get("title"))
@@ -213,11 +332,28 @@ def lookup(session, category, raw):
         "value": positive(raw.get("ecv")) if raw.get("ecvtenderYn") else None,
         "published": iso_ist(raw.get("publishedDate")),
         "closed": iso_ist(raw.get("tenderClosureDate")),
-        "awarded": datetime.fromtimestamp(awarded_ms / 1000, timezone.utc).isoformat(timespec="seconds") if awarded_ms else None,
+        "awarded": ms_iso(awarded_ms),
         "winner": winners[0] if winners else (bidders[0]["name"] if bidders else None),
         "bidders": bidders,
     }
-    return {k: v for k, v in record.items() if v not in (None, "", [])}, items
+    record = {k: v for k, v in record.items() if v not in (None, "", [])}
+    return record, award_page(nit, category, detail, bidders, items)
+
+
+def backfill_award(session, record, old_items):
+    """Award page for a result collected before award pages existed (and goods bidders)."""
+    nit, category = record["nit"], record["cat"]
+    detail = full_view(session, category, nit)
+    bidders, items = list(record.get("bidders") or []), old_items
+    if not bidders or items is None:
+        bidders, items = fetch_statement(session, category, nit)
+        sched = detail.get("tenderSchedule") or {}
+        estimate = positive(sched.get("ecv")) if category == "WORKS" else (goods_estimate(items) or positive(sched.get("ecv")))
+        with_pct(bidders, estimate)
+    if bidders and not record.get("bidders"):
+        record = {**record, "bidders": bidders}
+        record.setdefault("winner", bidders[0]["name"])
+    return record, award_page(nit, category, detail, record.get("bidders") or [], items or [])
 
 
 def quantiles(values):
@@ -226,11 +362,13 @@ def quantiles(values):
     return [pick(0), pick(0.25), pick(0.5), pick(0.75), pick(1)]
 
 
-def build_rates(results, items_cache):
+def build_rates(results, items_by_nit):
     """Per BOQ item: what winners (L1) and all bidders quoted, against the department's rate."""
     groups = {}
-    for nit, items in items_cache.items():
+    for nit, items in items_by_nit.items():
         result = results.get(nit) or {}
+        if result.get("cat") != "WORKS":
+            continue
         for item in items:
             rates = item.get("rates") or []
             est = item.get("est")
@@ -261,11 +399,16 @@ def build_rates(results, items_cache):
     return out
 
 
+def award_path(nit):
+    return AWARDS / f"{nit}.json"
+
+
 def main():
     session = make_session()
     cache = json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
-    items_cache = json.loads(ITEMS_CACHE.read_text(encoding="utf-8")) if ITEMS_CACHE.exists() else {}
+    old_items = json.loads(ITEMS_CACHE.read_text(encoding="utf-8")) if ITEMS_CACHE.exists() else {}
     state = json.loads(STATE.read_text(encoding="utf-8")) if STATE.exists() else {}
+    AWARDS.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     out_of_time = lambda: time.monotonic() - started > TIME_BUDGET
     todo, seen = [], set()
@@ -281,11 +424,12 @@ def main():
             if nit and nit not in cache and nit not in seen:
                 seen.add(nit)
                 todo.append((category, raw))
-    # Works results collected before item rates were stored only need their statement re-read.
-    backfill = [nit for nit, r in cache.items() if r.get("cat") == "WORKS" and r.get("bidders") and nit not in items_cache]
+    # Results collected before award pages existed get one now (newest first).
+    backfill = sorted((r for nit, r in cache.items() if not award_path(nit).exists()),
+                      key=lambda r: r.get("awarded") or "", reverse=True)
     todo = todo[:MAX_LOOKUPS]
     backfill = backfill[:max(0, MAX_LOOKUPS - len(todo))]
-    print(f"{len(todo)} new results to look up, {len(backfill)} item-rate backfills", flush=True)
+    print(f"{len(todo)} new results to look up, {len(backfill)} award pages to backfill", flush=True)
 
     ok = failed = 0
 
@@ -293,7 +437,6 @@ def main():
         CACHE.parent.mkdir(parents=True, exist_ok=True)
         CACHE.write_text(json.dumps(cache, ensure_ascii=False, sort_keys=True), encoding="utf-8")
         STATE.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
-        ITEMS_CACHE.write_text(json.dumps(items_cache, ensure_ascii=False, sort_keys=True, separators=(",", ":")), encoding="utf-8")
 
     def guarded(job):
         # Jobs queued after the time budget are skipped, not started.
@@ -301,10 +444,10 @@ def main():
             return None
         kind, cat, payload = job
         if kind == "new":
-            return kind, lookup(session, cat, payload)
-        return kind, (payload, fetch_statement(session, cat, payload)[1])
+            return lookup(session, cat, payload)
+        return backfill_award(session, payload, old_items.get(payload["nit"]))
 
-    jobs = [("new", cat, raw) for cat, raw in todo] + [("items", "WORKS", nit) for nit in backfill]
+    jobs = [("new", cat, raw) for cat, raw in todo] + [("award", r["cat"], r) for r in backfill]
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         futures = [pool.submit(guarded, job) for job in jobs]
         for future in as_completed(futures):
@@ -315,37 +458,46 @@ def main():
                 continue
             if done is None:
                 continue
-            kind, value = done
-            if kind == "new":
-                record, items = value
-                cache[record["nit"]] = record
-                if items:
-                    items_cache[record["nit"]] = items
-            else:
-                nit, items = value
-                items_cache[nit] = items
+            record, page = done
+            cache[record["nit"]] = record
+            award_path(record["nit"]).write_text(json.dumps(page, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
             ok += 1
             if ok % 200 == 0:
                 save()
                 print(f"  {ok} done ({int(time.monotonic() - started)}s)", flush=True)
 
     save()
+    # The old single item-rates file is no longer needed once every tender has its award page.
+    if ITEMS_CACHE.exists() and all(award_path(nit).exists() for nit in old_items):
+        ITEMS_CACHE.unlink()
+    items_by_nit = {}
+    for path in AWARDS.glob("*.json"):
+        try:
+            items = json.loads(path.read_text(encoding="utf-8")).get("items")
+        except Exception:
+            continue
+        if items:
+            items_by_nit[path.stem] = items
+    for nit, items in old_items.items():
+        items_by_nit.setdefault(nit, items)
+
     results = sorted(cache.values(), key=lambda r: r.get("awarded") or r.get("closed") or "", reverse=True)
     TARGET.write_text(json.dumps({
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "count": len(results),
         "results": results,
     }, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    rates = build_rates(cache, items_cache)
+    rates = build_rates(cache, items_by_nit)
     RATES.write_text(json.dumps({
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "tenders": len(items_cache),
+        "tenders": sum(1 for nit in items_by_nit if (cache.get(nit) or {}).get("cat") == "WORKS"),
         "items": rates,
     }, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     with_bids = sum(1 for r in results if r.get("bidders"))
+    pages = sum(1 for _ in AWARDS.glob("*.json"))
     print(f"Done {ok} jobs, {failed} failed. {len(results)} results, {with_bids} with bidder amounts "
-          f"({TARGET.stat().st_size / 1e6:.2f} MB); {len(rates)} BOQ items with past rates "
-          f"from {len(items_cache)} tenders ({RATES.stat().st_size / 1e6:.2f} MB).")
+          f"({TARGET.stat().st_size / 1e6:.2f} MB); {pages} award pages; {len(rates)} BOQ items with past rates "
+          f"({RATES.stat().st_size / 1e6:.2f} MB).")
 
 
 if __name__ == "__main__":
