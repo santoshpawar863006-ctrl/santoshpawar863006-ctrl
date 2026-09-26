@@ -31,14 +31,14 @@ jobs:
           last_tenders=$(( start - 3600 ))          # now
           last_details=$(( start - 3600 + 1200 ))   # in 20 min (after the tender list)
           last_results=$(( start - 7200 + 1800 ))   # in 30 min
-          last_history=$(( start - 21600 + 2700 ))  # in 45 min
+          history_started=0                         # once a day, at 22:00 UTC (early morning in India)
           run() { gh workflow run "$1" -R "$REPO" --ref main && echo "$(date -u +%H:%M) started $1"; }
           while [ $(( $(date +%s) - start )) -lt 19800 ]; do
             now=$(date +%s)
             if [ $(( now - last_tenders )) -ge 3600 ]; then run collect-kppp.yml && last_tenders=$now; fi
             if [ $(( now - last_details )) -ge 3600 ]; then run collect-details.yml && last_details=$now; fi
             if [ $(( now - last_results )) -ge 7200 ]; then run collect-results.yml && last_results=$now; fi
-            if [ $(( now - last_history )) -ge 21600 ]; then run collect-history.yml && last_history=$now; fi
+            if [ "$(date -u +%H)" = "22" ] && [ "$history_started" = 0 ]; then run collect-history.yml && history_started=1; fi
             sleep 240
           done
 
