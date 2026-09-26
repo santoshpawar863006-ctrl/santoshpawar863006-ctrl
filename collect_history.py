@@ -333,10 +333,17 @@ def write_excel(results, rates, root):
 
 
 def total_pages(session):
-    response = session.post(f"{API}/{SEARCH[CATEGORY]}?page=0&size=1&order-by-tender-publish=true",
-                            json={"category": CATEGORY, "status": "AWARDED", "title": ""}, headers=HEADERS, timeout=120)
-    response.raise_for_status()
-    return (int(response.headers.get("X-Total-Count") or 0) + 99) // 100
+    # KPPP sometimes does not answer for a few minutes; keep trying instead of losing the whole part.
+    for attempt in range(8):
+        try:
+            response = session.post(f"{API}/{SEARCH[CATEGORY]}?page=0&size=1&order-by-tender-publish=true",
+                                    json={"category": CATEGORY, "status": "AWARDED", "title": ""}, headers=HEADERS, timeout=60)
+            response.raise_for_status()
+            return (int(response.headers.get("X-Total-Count") or 0) + 99) // 100
+        except Exception as exc:
+            print(f"KPPP did not answer ({exc.__class__.__name__}), trying again in a minute", flush=True)
+            time.sleep(60)
+    raise SystemExit("KPPP is not answering; this part will be collected by the next run.")
 
 
 def collect(history, out, shard, shards):
