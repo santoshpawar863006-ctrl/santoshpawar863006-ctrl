@@ -119,7 +119,7 @@
     if (cached?.tenders?.length) ingest(cached);
     try {
       const r = await network;
-      if (r.status === 401) { location.assign('/login'); return; } // signed out on this device
+      if (r.status === 404 && r.headers.get('X-Robots-Tag')) { location.reload(); return; } // signed out on this device
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const text = await r.text();
       const fresh = JSON.parse(text);
