@@ -546,6 +546,7 @@ export default {
     if (url.pathname === '/similar-lite.json') return historyFile('similar.json', ctx, 1800);
     if (url.pathname === '/leaders.json') return historyFile('leaders.json', ctx, 1800);
     if (url.pathname === '/bidders.json') return historyFile('bidders.json', ctx, 1800);
+    if (url.pathname === '/quick.json') return historyFile('quick.json', ctx, 1800);
     const bids = url.pathname.match(/^\/api\/tender-bids\/(\d+)$/);
     if (bids) return tenderBids(bids[1], url.searchParams.get('m'), ctx);
     const itemwise = url.pathname.match(/^\/downloads\/(itemwise-\d{4}-\d{2}\.xlsx)$/);

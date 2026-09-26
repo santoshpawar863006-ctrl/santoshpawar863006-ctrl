@@ -31,6 +31,14 @@
   const dateFmt = new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' });
   const shortDate = new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' });
 
+  // Days between publishing and bid closing; under 8 means the 7-day minimum or less.
+  const bidDays = (pub, close) => (pub && close ? (close - pub) / DAY : null);
+  function quickBadge(days) {
+    if (days === null || days < 0 || days >= 8) return '';
+    const d = Math.floor(days);
+    return `<span class="badge quick" title="Only ${d} days between publishing and bid closing">⚡ ${d}-day tender</span>`;
+  }
+
   function timeLeft(ms) {
     if (!ms) return null;
     const diff = ms - Date.now();
@@ -181,6 +189,7 @@
       vmax: vmax ? Number(vmax) : null,
       closing,
       access: $('fAccess').value,
+      bidTime: Number($('fBidTime').value) || 0,
       sort: $('fSort').value
     };
   }
@@ -204,6 +213,7 @@
         if (f.vmax !== null && v >= f.vmax) continue;
       }
       if (closeBy && !(t._close && t._close <= closeBy)) continue;
+      if (f.bidTime && !(bidDays(t._pub, t._close) < f.bidTime)) continue;
       if (terms.length && !terms.every((w) => t._hay.includes(w))) continue;
       out.push(t);
     }
@@ -235,13 +245,14 @@
     if ($('fValue').value) chips.push(['fValue', $('fValue').selectedOptions[0].text]);
     if (f.closing) chips.push(['fClosing', `Closing in ${f.closing} days`]);
     if (f.access) chips.push(['fAccess', f.access]);
+    if (f.bidTime) chips.push(['fBidTime', $('fBidTime').selectedOptions[0].text]);
     if (S.savedOnly) chips.push(['saved', 'Saved only']);
     if (S.forMe) chips.push(['forMe', 'For me']);
     $('chips').innerHTML = chips.map(([k, label]) => `<button type="button" class="chip" data-clear="${k}">${esc(label)}<b aria-hidden="true">×</b></button>`).join('');
   }
 
   function syncControls(f) {
-    for (const id of ['fDistrict', 'fDept', 'fValue', 'fClosing', 'fAccess']) $(id).classList.toggle('set', Boolean($(id).value));
+    for (const id of ['fDistrict', 'fDept', 'fValue', 'fClosing', 'fAccess', 'fBidTime']) $(id).classList.toggle('set', Boolean($(id).value));
     document.querySelectorAll('.stat[data-cat]').forEach((el) => el.classList.toggle('active', el.dataset.cat === S.cat && !f.closing));
     document.querySelector('.stat.soon').classList.toggle('active', S.soon === 7 && !$('fClosing').value);
     $('savedBtn').classList.toggle('on', S.savedOnly);
@@ -318,6 +329,7 @@
         <span class="badge ${esc(t.cat)}">${esc(t.cat)}</span>
         ${t.access && t.access !== 'Open' ? `<span class="badge reserved">${esc(t.access)}</span>` : ''}
         ${t.work ? `<span class="badge soft">${esc(t.work)}</span>` : ''}
+        ${quickBadge(bidDays(t._pub, t._close))}
         ${left ? `<span class="due ${left.tone}">${esc(left.label)}</span>` : ''}
       </div>
       <h3>${esc(t.title)}</h3>
@@ -424,6 +436,7 @@
             ${t._pub ? `<dt>Published</dt><dd>${esc(dateFmt.format(new Date(t._pub)))}</dd>` : ''}
             <dt>Bid submission ends</dt><dd>${esc(closeText)}</dd>
           </dl></section>
+          <section class="panel quick-note" id="tpQuick" hidden></section>
           <section class="panel" id="tpContact" hidden></section>
           ${notePanel('t:' + t.id)}
           <div class="actions col">
@@ -452,6 +465,7 @@
     G = { t, f: null, sim: null, ratio: null, cover: 0, past: new Map(), rec: null, recalc: null };
     loadFull(t);
     renderSimilar(t);
+    renderQuickNote(t);
     if (location.hash !== '#t=' + t.id) history.pushState({ tender: t.id }, '', '#t=' + encodeURIComponent(t.id));
   }
 
@@ -1106,6 +1120,90 @@
     $('bMore').textContent = `Show more (${fmtInt(left)} left)`;
   }
 
+  // ---------- Quick tenders: published and closed fast (quick.json from the whole history) ----------
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  let quickData = null;
+  function loadQuick() {
+    if (!quickData) {
+      quickData = fetch('/quick.json').then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))).then((d) => {
+        // office row: [name, district, dept, tenders, 7 days or less, under 7 days, avg bidders, avg bidders on quick, top winners]
+        d.byOffice = new Map((d.offices || []).map((o) => [o[0], o]));
+        return d;
+      }).catch((err) => { quickData = null; throw err; });
+    }
+    return quickData;
+  }
+  const winnersHtml = (top) => top.map(([n, c]) => `<button type="button" class="linkish" data-contractor="${esc(n)}">${esc(splitName(n).firm)}</button> (${c})`).join(', ');
+
+  async function renderQuickNote(t) {
+    const days = bidDays(t._pub, t._close);
+    let q = null;
+    try { q = await loadQuick(); } catch {}
+    const box = $('tpQuick');
+    if (!box || G.t !== t) return;
+    const o = q?.byOffice.get(t.office);
+    const short = days !== null && days >= 0 && days < 8;
+    if (!short && !o) return;
+    const band = (label) => q?.bands.find((b) => b.label === label);
+    const bu = band('Under 7 days'); const b15 = band('11-15 days');
+    const lines = [];
+    if (short) {
+      lines.push(`This tender gives only <b>${Math.floor(days)} days</b> from publishing to bid closing${days < 7 ? ' — less than the usual 7-day minimum, so fewer contractors notice it in time' : ' — the minimum time allowed'}.`);
+      if (days < 7 && bu && b15) lines.push(`Past works tenders with under 7 days got ${bu.bidders} bidders on average (${bu.single}% had only one bidder), against ${b15.bidders} (${b15.single}%) for 11–15 day tenders.`);
+    }
+    if (o) {
+      lines.push(`<b>This office</b> gave 7 days or less on ${fmtInt(o[4])} of its ${fmtInt(o[3])} past works tenders${o[5] ? ` (${fmtInt(o[5])} under 7 days)` : ''}. Those got ${o[7]} bidders on average (all its tenders: ${o[6]}).`);
+      if (o[8]?.length) lines.push(`Its short tenders were usually won by ${winnersHtml(o[8])}.`);
+    }
+    box.innerHTML = `<h3>⚡ Time to bid</h3>${lines.map((l) => `<p>${l}</p>`).join('')}`;
+    box.hidden = false;
+  }
+
+  async function renderQuickPanel() {
+    const box = $('rQuickBody');
+    let q;
+    try { q = await loadQuick(); } catch {
+      box.innerHTML = '<p class="muted-p">These figures appear after tonight\'s history update.</p>';
+      return;
+    }
+    const district = $('rDistrict').value;
+    const offices = q.offices.filter((o) => !district || o[1] === district);
+    const quick = q.quick.filter((x) => !district || x[4] === district);
+    const maxShare = Math.max(...q.months.map(([, n, , q8]) => (n ? q8 / n : 0)));
+    const b = Object.fromEntries(q.bands.map((x) => [x.label, x]));
+    const under = b['Under 7 days'];
+    const fastMonths = q.months.slice().sort((x, y) => y[2] - x[2]).slice(0, 3).filter((m) => m[2]);
+    box.innerHTML = `
+      <div class="quick-find">
+        <p><b>What the past data shows</b></p>
+        <ul>
+          <li>Most works tenders give 7–15 days to bid; <b>7 days</b> is the usual minimum (${fmtInt(b['7 days']?.tenders || 0)} tenders).</li>
+          ${under?.tenders ? `<li>Only <b>${fmtInt(under.tenders)}</b> gave <b>less than 7 days</b>. They got ${under.bidders} bidders on average and <b>${under.single}%</b> had a single bidder (normally about ${b['11-15 days']?.single ?? 25}%).</li>` : ''}
+          ${fastMonths.length ? `<li>Very short tenders cluster in <b>${fastMonths.map((m) => MONTHS[m[0] - 1]).join(', ')}</b> — offices rushing to spend the budget before the financial year ends on 31 March.</li>` : ''}
+          <li>A short deadline is allowed for urgent work; treat it as a reason to look closer, not proof of anything.</li>
+        </ul>
+      </div>
+      <h4>Time to bid vs competition</h4>
+      <div class="table-wrap"><table class="lead"><thead><tr><th>Time to bid</th><th class="n">Tenders</th><th class="n">Avg bidders</th><th class="n">Only 1 bidder</th><th class="n">Usual winning bid</th></tr></thead>
+        <tbody>${q.bands.map((x) => `<tr><td>${esc(x.label)}</td><td class="n">${fmtInt(x.tenders)}</td><td class="n">${x.bidders ?? '—'}</td><td class="n">${x.single ?? '—'}%</td><td class="n">${x.l1 !== null ? esc(pctText(x.l1)) : '—'}</td></tr>`).join('')}</tbody></table></div>
+      <h4>When short tenders are published</h4>
+      <div class="quick-months">${q.months.map(([m, n, q7, q8]) => `<div title="${fmtInt(q8)} of ${fmtInt(n)} tenders gave 7 days or less; ${fmtInt(q7)} under 7 days">
+        <span>${MONTHS[m - 1]}</span><i style="height:${n ? Math.round(q8 / n / maxShare * 100) : 0}%"></i><b>${q7 || ''}</b></div>`).join('')}</div>
+      <p class="note">Bar: share of tenders with 7 days or less. Number: tenders under 7 days.</p>
+      <h4>Offices that use short deadlines most${district ? ` in ${esc(district)}` : ''}</h4>
+      ${offices.length ? `<div class="table-wrap"><table class="lead"><thead><tr><th>Office</th><th class="n">Under 7 days</th><th class="n">7 days or less</th><th class="n">All tenders</th><th class="n">Bidders (short / all)</th><th>Short tenders usually won by</th></tr></thead>
+        <tbody>${offices.slice(0, 60).map((o, i) => `<tr${i >= 15 ? ' class="more-row" hidden' : ''}><td>${esc(o[0])}<small class="who">${esc([o[1], o[2]].filter(Boolean).join(' · '))}</small></td><td class="n"><b>${fmtInt(o[5])}</b></td><td class="n">${fmtInt(o[4])}</td><td class="n">${fmtInt(o[3])}</td><td class="n">${o[7]} / ${o[6]}</td><td><small>${winnersHtml(o[8])}</small></td></tr>`).join('')}</tbody></table></div>${offices.length > 15 ? `<button class="btn ghost q-more" type="button">Show ${Math.min(offices.length, 60)} offices</button>` : ''}` : '<p class="muted-p">No office here used short deadlines more than once.</p>'}
+      <h4>Tenders with less than 7 days to bid <span class="count">${fmtInt(quick.length)}</span></h4>
+      ${quick.length ? `<div class="table-wrap"><table class="lead"><thead><tr><th>Closed</th><th class="n">Days</th><th>Work</th><th>Winner</th><th class="n">Bidders</th><th class="n">Winning bid</th></tr></thead>
+        <tbody>${quick.slice(0, 300).map((x, i) => `<tr${i >= 20 ? ' class="more-row" hidden' : ''}><td><small>${esc(x[1])}</small></td><td class="n">${x[2]}</td>
+          <td><button type="button" class="linkish item-name" data-bids="${esc(x[0])}" data-month="${esc(String(x[1]).slice(0, 7))}">${esc(x[6])}</button><small>${esc([x[3], x[4]].filter(Boolean).join(' · '))}</small></td>
+          <td>${x[8] ? `<button type="button" class="linkish" data-contractor="${esc(x[8])}">${esc(splitName(x[8]).firm)}</button>` : '—'}</td><td class="n">${x[9]}</td><td class="n">${x[10] !== null ? esc(pctText(x[10])) : '—'}</td></tr>`).join('')}</tbody></table></div>${quick.length > 20 ? `<button class="btn ghost q-more" type="button">Show all ${fmtInt(Math.min(quick.length, 300))}</button>` : ''}` : ''}`;
+    box.querySelectorAll('.q-more').forEach((btn) => btn.addEventListener('click', () => {
+      btn.previousElementSibling.querySelectorAll('.more-row').forEach((row) => { row.hidden = false; });
+      btn.remove();
+    }));
+  }
+
   // Top bidders by wins, for every district and year, from the whole history (leaders.json).
   let leaders = null;
   async function loadLeaders() {
@@ -1242,6 +1340,7 @@
     while (R.shown < Math.min(keep, R.filtered.length)) moreResults();
     renderWatch();
     if ($('rCharts').open) renderCharts();
+    if ($('rQuick').open) renderQuickPanel();
   }
 
   // "NAME (1)( FIRM NAME )" → firm and person, the way KPPP writes bidders.
@@ -1281,7 +1380,7 @@
     return `<details class="rrow">
       <summary>
         <div class="rmain">
-          <div class="card-top"><span class="badge ${esc(r.cat)}">${esc(r.cat)}</span>${r.work ? `<span class="badge soft">${esc(r.work)}</span>` : ''}${when ? `<span class="due">Awarded ${esc(when)}</span>` : ''}</div>
+          <div class="card-top"><span class="badge ${esc(r.cat)}">${esc(r.cat)}</span>${r.work ? `<span class="badge soft">${esc(r.work)}</span>` : ''}${quickBadge(bidDays(Date.parse(r.published), Date.parse(r.closed)))}${when ? `<span class="due">Awarded ${esc(when)}</span>` : ''}</div>
           <h3>${esc(r.title)}</h3>
           <div class="meta">${pinIcon}<span>${esc([r.district, r.dept].filter(Boolean).join(' · ') || r.office || '')}</span></div>
           ${hitLine}
@@ -1425,6 +1524,7 @@
         ${r.bidders?.length ? `<section class="panel"><h3>All bids <span class="count">${r.bidders.length}</span></h3>${bidderTable(r)}</section>` : ''}
         ${notePanel('r:' + r.nit)}
         <div id="awardMore"><section class="panel"><h3>Loading timeline and item-wise rates…</h3><div class="skeleton line"></div><div class="skeleton line short"></div></section></div>
+        <div id="awardTender"><section class="panel"><h3>Loading tender conditions from KPPP…</h3><div class="skeleton line"></div><div class="skeleton line short"></div></section></div>
       </div>`;
     d.setAttribute('aria-hidden', 'false');
     d.classList.add('open');
@@ -1435,6 +1535,7 @@
     const hash = '#a=' + encodeURIComponent(r.nit);
     if (location.hash !== hash) history.pushState({ award: r.nit }, '', hash);
 
+    loadPastTender(r);
     const box = $('awardMore');
     try {
       if (extra?.a) awardCache.set(r.nit, Promise.resolve(extra.a));
@@ -1452,6 +1553,60 @@
       awardCache.delete(r.nit);
       if ($('awardMore') === box) box.innerHTML = '<section class="panel"><h3>Timeline and item-wise rates</h3><p class="muted-p">These details are still being collected for this tender. Please check again in a few hours.</p></section>';
     }
+  }
+
+  // A past tender's conditions (EMD, fee, eligibility, documents, contact), asked from KPPP when the page opens.
+  async function loadPastTender(r) {
+    const box = $('awardTender');
+    const key = `${r.cat || 'WORKS'}/${r.nit}`;
+    try {
+      if (!detailCache.has(key)) {
+        detailCache.set(key, fetch(`/api/tender/${key}`).then((x) => x.json().catch(() => ({ success: false }))).then((j) => (j.success ? j : Promise.reject(new Error(j.message || 'n/a')))));
+      }
+      const f = await detailCache.get(key);
+      if ($('awardTender') !== box) return;
+      box.innerHTML = pastTenderHtml(r, f);
+    } catch {
+      detailCache.delete(key);
+      if ($('awardTender') !== box) return;
+      box.innerHTML = `<section class="panel"><h3>Tender conditions</h3><p class="muted-p">KPPP didn't send this old tender's conditions (EMD, eligibility, documents) right now. It may no longer keep them for closed tenders.</p>
+        <button class="btn" type="button" id="retryPast">Try again</button></section>`;
+      $('retryPast')?.addEventListener('click', () => { box.innerHTML = '<section class="panel"><h3>Loading tender conditions from KPPP…</h3><div class="skeleton line"></div></section>'; loadPastTender(r); });
+    }
+  }
+
+  function pastTenderHtml(r, f) {
+    const m = f.money || {}; const tm = f.terms || {}; const c = f.contact || {};
+    const emd = num(m.emd) ? money(m.emd, { full: true }) + (m.emdCash && m.emdGuarantee ? `<small class="fact-note">${money(m.emdCash)} cash + ${money(m.emdGuarantee)} bank guarantee</small>` : '') : '';
+    const facts = [
+      ['Department', esc(r.dept || '')],
+      ['Office', esc(r.office || '')],
+      ['EMD', emd],
+      ['Tender fee', num(m.fee) ? money(m.fee, { full: true }) : ''],
+      ['Sanctioned budget', num(m.provisional) ? money(m.provisional, { full: true }) : ''],
+      ['Published', esc(fmtKppp(f.dates?.published) || '')],
+      ['Bid submission ended', esc(fmtKppp(f.dates?.submission) || '')],
+      ['Bids opened', esc(fmtKppp(f.dates?.opening) || '')],
+      ['Work description', f.description && f.description !== r.title ? esc(f.description) : ''],
+      ['Evaluation', esc(tm.evaluation || '')],
+      ['Bid type', esc(tm.bidType || '')],
+      ['Tax', tm.tax ? esc(tm.tax[0].toUpperCase() + tm.tax.slice(1)) : ''],
+      ['Bid validity', tm.validityDays ? `${tm.validityDays} days` : ''],
+      ['Call', tm.call ? `Call ${tm.call}${tm.retender ? ' (re-tender)' : ''}` : ''],
+      ['File number', esc(f.fileNumber || '')],
+      ['Officer', esc(c.person || '')],
+      ['Mobile', c.mobile ? `<a href="tel:${esc(c.mobile)}">${esc(c.mobile)}</a>` : ''],
+      ['Address', esc(c.address || '')]
+    ].filter(([, v]) => v);
+    const elig = f.eligibility?.length ? `<section class="panel"><h3>Who was eligible <span class="count">${f.eligibility.length}</span></h3><ol class="rules">${f.eligibility.map((x) => `<li>${esc(x)}</li>`).join('')}</ol></section>` : '';
+    const tech = f.technical?.length ? `<section class="panel"><h3>Technical qualification <span class="count">${f.technical.length}</span></h3><div class="quals">${f.technical.map((q) => `<div class="qual">
+        <div class="qual-top">${q.category ? `<span class="badge soft">${esc(q.category)}</span>` : ''}${q.weight ? `<span class="badge soft">${q.weight} marks</span>` : ''}</div>
+        <p>${esc(q.text)}</p>${q.documents?.length ? `<small>Proof: ${q.documents.map(esc).join(', ')}</small>` : ''}</div>`).join('')}</div></section>` : '';
+    const docs = f.documents?.length ? `<section class="panel"><h3>Documents required with the bid <span class="count">${f.documents.length}</span></h3>
+      <ul class="checklist">${f.documents.map((x) => `<li>${icon.check}<span>${esc(x.name)}${x.cover ? `<small>${esc(x.cover)}${x.optional ? '' : ' · mandatory'}</small>` : ''}</span></li>`).join('')}</ul></section>` : '';
+    return `<section class="panel"><h3>Tender conditions</h3><dl class="facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
+      ${f.partial ? '<p class="note">KPPP was slow, so this shows the main details only. Open the tender again in a minute for eligibility and documents.</p>' : ''}</section>
+      <div class="past-cols">${elig}${docs}</div>${tech}`;
   }
 
   function awardDetailsHtml(r, a) {
@@ -1593,8 +1748,13 @@
     try { const res = await fetch(`/api/tender-bids/${encodeURIComponent(nit)}?m=${encodeURIComponent(month)}`); j = res.ok ? await res.json() : null; } catch {}
     if (!j?.success) { toast('Bids for this tender are not available yet'); return; }
     const bidders = j.bidders.map(([name, amount, rank, pct]) => ({ name, amount, rank, pct })).sort((a, b) => (a.rank || 99) - (b.rank || 99));
-    const base = row?.r || {};
-    const r = { nit: String(nit), ref: base.ref, title: base.title || base.ref || 'Tender', district: base.district, dept: base.dept,
+    let base = row?.r;
+    if (!base && quickData) {
+      const x = (await quickData.catch(() => null))?.quick.find((q) => String(q[0]) === String(nit));
+      if (x) base = { title: x[6], closed: x[1], office: x[3], district: x[4], dept: x[5], value: x[7], winner: x[8] };
+    }
+    base = base || {};
+    const r = { nit: String(nit), ref: base.ref, title: base.title || base.ref || 'Tender', district: base.district, dept: base.dept, office: base.office,
       value: base.value, closed: base.closed, winner: bidders[0]?.name || base.winner, bidders, cat: 'WORKS', _award: Date.parse(base.closed) || 0 };
     const a = { bidders, items: j.items.map(([code, name, unit, qty, est, rates]) => ({ code, name, unit, qty, est, rates })) };
     openAward(nit, { r, a });
@@ -2166,7 +2326,7 @@
   function reset() {
     S.cat = 'ALL'; S.soon = 0; S.savedOnly = false; S.forMe = false; S.q = '';
     $('q').value = '';
-    for (const id of ['fDistrict', 'fDept', 'fValue', 'fClosing', 'fAccess']) $(id).value = '';
+    for (const id of ['fDistrict', 'fDept', 'fValue', 'fClosing', 'fAccess', 'fBidTime']) $(id).value = '';
     $('fSort').value = 'new';
     apply();
   }
@@ -2181,7 +2341,7 @@
       S.q = e.target.value; apply({ keepScroll: true });
     }, 140);
   });
-  for (const id of ['fDistrict', 'fDept', 'fValue', 'fAccess', 'fSort']) $(id).addEventListener('change', () => apply({ keepScroll: true }));
+  for (const id of ['fDistrict', 'fDept', 'fValue', 'fAccess', 'fBidTime', 'fSort']) $(id).addEventListener('change', () => apply({ keepScroll: true }));
   $('fClosing').addEventListener('change', () => { S.soon = 0; apply({ keepScroll: true }); });
   document.querySelectorAll('.stat[data-cat]').forEach((el) => el.addEventListener('click', () => {
     S.cat = el.dataset.cat; S.soon = 0; $('fClosing').value = ''; apply();
@@ -2222,6 +2382,7 @@
   for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork', 'rSort', 'rPeriod', 'rValue', 'rBidderCount']) $(id).addEventListener('change', () => applyResults());
   $('rSavedBtn').addEventListener('click', () => { R.savedOnly = !R.savedOnly; applyResults(); });
   $('rCharts').addEventListener('toggle', () => { if ($('rCharts').open && R.all) renderCharts(); });
+  $('rQuick').addEventListener('toggle', () => { if ($('rQuick').open) renderQuickPanel(); });
   $('rExport').addEventListener('click', () => { if (R.filtered.length) exportResults(); else toast('No results to export'); });
   $('rSavedCount').textContent = R.saved.size;
   // Bigger text for easier reading, remembered on this device.

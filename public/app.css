@@ -584,3 +584,19 @@ dialog.wide{width:min(720px,calc(100% - 24px));max-height:calc(100vh - 40px)}
   .calc-grid{grid-template-columns:1fr}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* Quick tenders */
+.badge.quick{background:#fff4e0;color:#9a4b00;border-color:#f3c98b}
+[data-theme="dark"] .badge.quick{background:#3a2a10;color:#ffc46b;border-color:#6b4b1a}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .badge.quick{background:#3a2a10;color:#ffc46b;border-color:#6b4b1a}}
+.quick-note p{margin:.4em 0;line-height:1.5}
+.quick-find ul{margin:.3em 0 1em;padding-left:1.2em;line-height:1.55}
+#rQuickBody h4{margin:1.2em 0 .5em}
+.quick-months{display:grid;grid-template-columns:repeat(12,1fr);gap:6px;align-items:end;height:130px;padding-top:8px}
+.quick-months div{display:flex;flex-direction:column-reverse;align-items:center;height:100%;gap:3px;font-size:12px}
+.quick-months i{display:block;width:70%;min-height:2px;background:#f0a33a;border-radius:4px 4px 0 0}
+.quick-months b{font-size:11px;color:#9a4b00;min-height:1em}
+.past-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.past-cols>.panel{margin:0}
+@media (max-width:760px){.past-cols{grid-template-columns:1fr}}
+#awardTender{display:grid;gap:16px}
