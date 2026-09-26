@@ -136,6 +136,47 @@ a{color:var(--brand)}
 .change-list small{color:var(--muted);font-size:12px}
 .panel.changes{border-color:color-mix(in srgb,var(--warn) 40%,var(--line))}
 
+/* What to bid + my bid */
+.bid-guide{border-color:color-mix(in srgb,var(--brand) 35%,var(--line))}
+.bid-main{display:flex;flex-direction:column;gap:2px;margin-bottom:12px}
+.bid-main span,.bid-range span,.mybid-sum span{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.bid-main strong{font-size:30px;letter-spacing:-.02em;color:var(--brand)}
+.bid-main small,.bid-range small,.mybid-sum small{color:var(--muted);font-size:12.5px}
+.bid-range{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.bid-range div{background:var(--surface-2);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.bid-range b{font-size:16px;overflow-wrap:anywhere}
+.bid-range div:first-child{background:var(--ok-soft)}
+.bid-why{margin:12px 0 0;padding-left:18px;font-size:13.5px;color:var(--ink-2);display:grid;gap:4px}
+.bid-guide .btn{margin-top:4px}
+.mybid{background:var(--surface);border:1px solid color-mix(in srgb,var(--brand) 35%,var(--line));border-radius:14px;padding:12px 14px;margin:10px 0 8px;display:grid;gap:10px}
+.mybid-float{position:sticky;top:66px;z-index:3;display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px;padding:8px 14px;margin:0 0 10px;border-radius:12px;background:var(--brand);color:#fff;box-shadow:0 8px 20px rgba(55,48,163,.25)}
+.mybid-float[hidden]{display:none}
+.mybid-float span{font-size:12px;font-weight:700;opacity:.85;text-transform:uppercase;letter-spacing:.04em}
+.mybid-float b{font-size:17px}
+.mybid-float small{font-size:12px;opacity:.9}
+.mybid:empty{display:none}
+.mybid-head{display:flex;flex-direction:column;gap:2px}
+.mybid-head small{color:var(--muted);font-size:12.5px}
+.mybid-sum{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.mybid-sum div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.mybid-sum strong{font-size:17px;overflow-wrap:anywhere}
+.mybid-sum .hl strong{font-size:21px;color:var(--brand)}
+.mybid-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.mybid-actions .lbl{font-size:12.5px;font-weight:700;color:var(--muted)}
+.mybid-actions .btn{height:34px;padding:0 12px;font-size:13px}
+.fill-pct{display:inline-flex;align-items:center;gap:4px;font-size:13px;font-weight:700}
+.fill-pct input{width:64px;height:34px;border:1px solid var(--line);border-radius:8px;padding:0 6px;background:var(--surface);color:var(--ink);font:inherit}
+td.my{background:color-mix(in srgb,var(--brand) 5%,transparent);white-space:nowrap}
+th.my{color:var(--brand)!important}
+td.my input{width:96px;height:32px;border:1px solid var(--line);border-radius:8px;padding:0 8px;text-align:right;background:var(--surface);color:var(--ink);font:inherit;font-size:13px}
+td.my input:focus{outline:2px solid var(--brand);border-color:transparent}
+@media (max-width:760px){
+  .bid-range,.mybid-sum{grid-template-columns:1fr 1fr}
+  .bid-range div:last-child{grid-column:1/-1}
+  .mybid{padding:10px}
+  .mybid-head small{display:none}
+}
+
 /* ---------- Contractor profile ---------- */
 .cp{display:flex;flex-direction:column;gap:16px;padding-top:22px;padding-bottom:60px}
 .cp-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}

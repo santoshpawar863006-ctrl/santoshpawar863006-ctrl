@@ -416,6 +416,7 @@
           </div>
         </aside>
         <main class="tp-main">
+          <section class="panel bid-guide" id="tpBid" hidden></section>
           <div id="tpFull">${loadingBlock()}</div>
           <section class="panel" id="tpSimilar" hidden></section>
           ${calculatorHtml(t)}
@@ -427,6 +428,7 @@
     d.scrollTop = 0;
     d.querySelector('[data-close]').focus();
     bindCalculator(t);
+    G = { t, f: null, sim: null, ratio: null, cover: 0, past: new Map(), rec: null, recalc: null };
     loadFull(t);
     renderSimilar(t);
     if (location.hash !== '#t=' + t.id) history.pushState({ tender: t.id }, '', '#t=' + encodeURIComponent(t.id));
@@ -548,8 +550,10 @@
       <ul class="checklist">${f.documents.map((x) => `<li>${icon.check}<span>${esc(x.name)}${x.cover ? `<small>${esc(x.cover)}${x.optional ? '' : ' · mandatory'}</small>` : ''}</span></li>`).join('')}</ul></section>` : '';
 
     const itemCount = f.groups.reduce((n, g) => n + g.items.length, 0);
-    const items = itemCount ? `<section class="panel"><h3>${t.cat === 'WORKS' ? 'Bill of quantities' : 'Items'} <span class="count">${fmtInt(itemCount)}</span></h3>
+    const items = itemCount ? `<section class="panel" id="tpBoq"><h3>${t.cat === 'WORKS' ? 'Bill of quantities' : 'Items'} <span class="count">${fmtInt(itemCount)}</span></h3>
       <div id="boqPricing"></div>
+      <div class="mybid" id="myBid"></div>
+      <div class="mybid-float" id="myBidFloat" hidden></div>
       ${f.groups.map((g, gi) => {
         // Goods tenders often carry ₹1 placeholder prices; only show real rates.
         const showRate = g.items.some((i) => i.rate > 1);
@@ -557,13 +561,15 @@
         return `<div class="boq">
         ${g.name || g.total ? `<div class="boq-head"><b>${esc(g.name || 'Items')}</b>${g.note ? `<span class="badge soft">${esc(g.note)}</span>` : ''}${g.total ? `<span class="spacer"></span><strong>${money(g.total, { full: true })}</strong>` : ''}</div>` : ''}
         <div class="table-wrap"><table>
-          <thead><tr><th>#</th><th>Item</th><th class="n">Qty</th><th>Unit</th>${showRate ? '<th class="n">Rate</th>' : ''}${showAmt ? '<th class="n">Amount</th>' : ''}</tr></thead>
+          <thead><tr><th>#</th><th>Item</th><th class="n">Qty</th><th>Unit</th>${showRate ? '<th class="n">Rate</th>' : ''}${showAmt ? '<th class="n">Amount</th>' : ''}<th class="n my">Your rate</th><th class="n my">Your amount</th></tr></thead>
           <tbody>${g.items.map((i, ii) => `<tr data-item="${gi}:${ii}"${ii >= 12 ? ` class="more-row" data-group="${gi}" hidden` : ''}>
             <td>${esc(i.code || ii + 1)}</td>
             <td><div class="item-name">${esc(i.name)}</div>${i.spec && i.spec !== i.name ? `<small>${esc(i.spec)}</small>` : ''}${i.section ? `<small>${esc(i.section)}</small>` : ''}</td>
             <td class="n">${i.qty ?? ''}</td><td>${esc(i.unit)}</td>
             ${showRate ? `<td class="n">${i.rate ? money(i.rate, { full: true }) : ''}<span class="past-rate" data-past="${gi}:${ii}"></span></td>` : ''}
             ${showAmt ? `<td class="n">${i.amount ? money(i.amount, { full: true }) : ''}</td>` : ''}
+            <td class="n my"><input type="number" min="0" step="any" inputmode="decimal" data-my="${gi}:${ii}" aria-label="Your rate for item ${esc(i.code || ii + 1)}" placeholder="₹"></td>
+            <td class="n my" data-myamt="${gi}:${ii}"></td>
           </tr>`).join('')}</tbody>
         </table></div>
         ${g.items.length > 12 ? `<button class="btn ghost show-rows" type="button" data-group="${gi}">Show all ${fmtInt(g.items.length)} items</button>` : ''}
@@ -586,6 +592,9 @@
       <section class="panel"><h3>Tender details</h3><dl class="facts">${terms.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></section>
       ${files}${eligibility}${technical}${docs}${items}
       ${f.checkedAt ? `<p class="note">Details copied from KPPP ${esc(ago(f.checkedAt) || '')} and re-checked every few hours.</p>` : ''}`;
+    if (G.t === t) G.f = f;
+    if (itemCount) setupMyBid(t, f);
+    updateBidGuide();
     if (t.cat === 'WORKS' && itemCount) annotateRates(t, f);
     loadFiles(t);
     if (f.partial) {
@@ -595,6 +604,206 @@
       $('tpFull').querySelectorAll(`.more-row[data-group="${b.dataset.group}"]`).forEach((r) => { r.hidden = false; });
       b.remove();
     }));
+  }
+
+  // ---------- What to bid + price the BOQ yourself ----------
+  let G = {};
+  const quart = (a, q) => (a.length ? a[Math.min(a.length - 1, Math.max(0, Math.round(q * (a.length - 1))))] : null);
+  const boqEstimate = (f) => (f?.groups || []).reduce((n, g) => n + g.items.reduce((m, i) => m + (num(i.amount) || (num(i.rate) && num(i.qty) ? i.rate * i.qty : 0)), 0), 0);
+
+  function updateBidGuide() {
+    const { t, f, sim, ratio, cover } = G;
+    const box = $('tpBid');
+    if (!t || !box) return;
+    const base = num(t.value) || boqEstimate(f) || null;
+    const useSim = sim && sim.pcts?.length >= 3 ? sim : null;
+    const useItems = ratio && cover >= 30 ? ratio : null;
+    if (!base || (!useSim && !useItems)) { box.hidden = true; G.rec = null; return; }
+    const simBid = useSim ? base * (1 + quart(useSim.pcts, 0.5) / 100) : null;
+    const itemBid = useItems ? base * useItems : null;
+    // Real winning totals of similar tenders come first; item rates are the fallback.
+    const rec = simBid || itemBid;
+    G.rec = rec;
+    const low = useSim ? base * (1 + quart(useSim.pcts, 0.25) / 100) : rec * 0.97;
+    const high = useSim ? base * (1 + quart(useSim.pcts, 0.75) / 100) : rec * 1.03;
+    const vs = (x) => { const p = (x / base - 1) * 100; return `${Math.abs(p).toFixed(1)}% ${p <= 0 ? 'below' : 'above'} ${num(t.value) ? 'tender value' : 'estimate'}`; };
+    const hasBoq = Boolean($('tpBoq'));
+    box.hidden = false;
+    box.innerHTML = `<h3>What to bid</h3>
+      <div class="bid-main"><span>Suggested bid based on past winners</span><strong>${money(rec, { full: true })}</strong><small>${esc(vs(rec))}</small></div>
+      <div class="bid-range">
+        <div><span>To win more often</span><b>${money(low, { full: true })}</b><small>${esc(vs(low))}${useSim ? ' · lower than 3 in 4 past winners' : ''}</small></div>
+        <div><span>Typical winner</span><b>${money(rec, { full: true })}</b><small>middle of past winning bids</small></div>
+        <div><span>Safer margin</span><b>${money(high, { full: true })}</b><small>${esc(vs(high))}${useSim ? ' · 1 in 4 past winners bid this or more' : ''}</small></div>
+      </div>
+      <ul class="bid-why">
+        ${useSim ? `<li>Winners of ${fmtInt(useSim.pcts.length)} similar tenders (${esc(useSim.scope)}) bid a median of <b>${esc(pctText(quart(useSim.pcts, 0.5)))}</b>${simBid ? ` → ${money(simBid, { full: true })}` : ''}.</li>` : ''}
+        ${useItems ? `<li>${useSim ? 'For comparison, pricing' : 'Pricing'} this bill of quantities at past winners' item rates (${cover.toFixed(0)}% of the work matched) gives <b>${money(itemBid, { full: true })}</b>.</li>` : ''}
+      </ul>
+      <p class="note">A guide from past KPPP results only — check your own costs and never bid below them.</p>
+      ${hasBoq ? '<button class="btn primary" type="button" id="goBoq">Enter my rates item-wise ↓</button>' : ''}`;
+    $('goBoq')?.addEventListener('click', () => $('tpBoq').scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    G.recalc?.();
+  }
+
+  function setupMyBid(t, f) {
+    const box = $('myBid');
+    if (!box) return;
+    const key = `tenderone_bid_${t.cat}_${t.nit}`;
+    const saved = readJSON(key, {});
+    const inputs = [...$('tpFull').querySelectorAll('input[data-my]')];
+    const item = (k) => { const [gi, ii] = k.split(':').map(Number); return f.groups[gi].items[ii]; };
+    const deptAmt = (i) => num(i.amount) || (num(i.rate) && num(i.qty) ? i.rate * i.qty : 0);
+    for (const inp of inputs) if (saved[inp.dataset.my] != null) inp.value = saved[inp.dataset.my];
+
+    box.innerHTML = `<div class="mybid-head"><b>My bid</b><small>Type your rate for each item below — the total updates as you type and is saved on this device.</small></div>
+      <div class="mybid-sum" id="myBidSum"></div>
+      <div class="mybid-actions">
+        <span class="lbl">Fill rates:</span>
+        ${t.cat === 'WORKS' ? '<button class="btn" type="button" data-fill="past">Past winning rates</button>' : ''}
+        <span class="fill-pct"><button class="btn" type="button" data-fill="pct">Department rate</button><input type="number" id="fillPct" value="-10" step="0.5" inputmode="decimal" aria-label="Percent above or below department rate">%</span>
+        <button class="btn ghost" type="button" data-fill="clear">Clear</button>
+        <span class="spacer"></span>
+        <span class="lbl">Download:</span>
+        <button class="btn" type="button" data-export="xlsx">Excel</button>
+        <button class="btn" type="button" data-export="pdf">PDF</button>
+      </div>`;
+
+    let saveTimer;
+    const recalc = () => {
+      if ($('myBid') !== box) return;
+      let mine = 0, rest = 0, all = 0, priced = 0;
+      const store = {};
+      for (const inp of inputs) {
+        const i = item(inp.dataset.my);
+        const rate = inp.value === '' ? null : Number(inp.value);
+        const cell = box.closest('section').querySelector(`[data-myamt="${inp.dataset.my}"]`);
+        all += deptAmt(i);
+        if (rate !== null && Number.isFinite(rate) && rate >= 0) {
+          const amt = rate * (i.qty || 0);
+          mine += amt; priced++;
+          store[inp.dataset.my] = rate;
+          if (cell) cell.textContent = money(amt, { full: true }) || '₹0';
+        } else {
+          rest += deptAmt(i);
+          if (cell) cell.textContent = '';
+        }
+      }
+      const total = mine + rest;
+      const pct = all ? (total / all - 1) * 100 : null;
+      const pctTxt = (p, what) => `${Math.abs(p).toFixed(2)}% ${p <= 0 ? 'below' : 'above'} ${what}`;
+      $('myBidSum').innerHTML = `
+        <div class="hl"><span>My bid total</span><strong>${priced ? money(total, { full: true }) : '—'}</strong><small>${priced && pct !== null ? esc(pctTxt(pct, "department's estimate")) : 'Enter rates below'}</small></div>
+        <div><span>Items priced</span><strong>${fmtInt(priced)} of ${fmtInt(inputs.length)}</strong><small>${priced && priced < inputs.length ? `other items counted at department rate (${money(rest, { full: true })})` : priced ? 'all items priced' : ''}</small></div>
+        ${G.rec && priced ? `<div><span>vs suggested bid</span><strong>${money(Math.abs(total - G.rec), { full: true }) || '₹0'}</strong><small>${total <= G.rec ? 'below' : 'above'} the suggested ${money(G.rec, { full: true })}</small></div>` : ''}`;
+      G.mine = { total, priced, all };
+      const fl = $('myBidFloat');
+      if (fl) {
+        fl.hidden = !priced;
+        fl.innerHTML = `<span>My bid</span><b>${money(total, { full: true })}</b>${pct !== null ? `<small>${esc(pctTxt(pct, 'estimate'))} · ${fmtInt(priced)}/${fmtInt(inputs.length)} priced</small>` : ''}`;
+      }
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => { if (Object.keys(store).length) writeJSON(key, store); else try { localStorage.removeItem(key); } catch {} }, 400);
+    };
+    if (G.t === t) G.recalc = recalc;
+    inputs.forEach((inp) => inp.addEventListener('input', recalc));
+
+    box.addEventListener('click', (e) => {
+      const fill = e.target.closest('[data-fill]')?.dataset.fill;
+      const exp = e.target.closest('[data-export]')?.dataset.export;
+      if (fill === 'clear') { inputs.forEach((inp) => { inp.value = ''; }); recalc(); toast('Rates cleared'); }
+      if (fill === 'pct') {
+        const p = Number($('fillPct').value) || 0;
+        let n = 0;
+        for (const inp of inputs) { const i = item(inp.dataset.my); if (num(i.rate)) { inp.value = (i.rate * (1 + p / 100)).toFixed(2); n++; } }
+        recalc(); toast(n ? `${n} items filled at department rate ${p > 0 ? '+' : ''}${p}%` : 'This tender has no department rates to start from');
+      }
+      if (fill === 'past') {
+        if (!G.past.size) { toast('Past winning rates are still loading or not found for these items'); return; }
+        let n = 0, other = 0;
+        for (const inp of inputs) {
+          const i = item(inp.dataset.my);
+          const past = G.past.get(inp.dataset.my);
+          if (past) { inp.value = past.toFixed(2); n++; } else if (num(i.rate) && G.ratio) { inp.value = (i.rate * G.ratio).toFixed(2); other++; }
+        }
+        recalc(); toast(`${n} items at past winning rates${other ? `, ${other} scaled the same way` : ''}`);
+      }
+      if (exp) exportBid(t, f, inputs.map((inp) => [inp.dataset.my, inp.value === '' ? null : Number(inp.value)]), exp);
+    });
+    recalc();
+  }
+
+  const scriptLoads = new Map();
+  function loadScript(src) {
+    if (!scriptLoads.has(src)) {
+      scriptLoads.set(src, new Promise((resolve, reject) => {
+        const el = Object.assign(document.createElement('script'), { src, onload: resolve, onerror: () => { scriptLoads.delete(src); reject(new Error('Could not load ' + src)); } });
+        document.head.appendChild(el);
+      }));
+    }
+    return scriptLoads.get(src);
+  }
+
+  async function exportBid(t, f, mineList, kind) {
+    const mine = new Map(mineList);
+    const rows = [];
+    let deptTotal = 0, myTotal = 0;
+    f.groups.forEach((g, gi) => g.items.forEach((i, ii) => {
+      const k = `${gi}:${ii}`;
+      const dAmt = num(i.amount) || (num(i.rate) && num(i.qty) ? i.rate * i.qty : null);
+      const my = mine.get(k);
+      const myAmt = my !== null && my !== undefined ? my * (i.qty || 0) : dAmt;
+      deptTotal += dAmt || 0; myTotal += myAmt || 0;
+      rows.push({ no: i.code || ii + 1, group: g.name || '', name: i.name || '', qty: i.qty ?? '', unit: i.unit || '', rate: num(i.rate), amt: dAmt, past: G.f === f ? G.past.get(k) ?? null : null, my: my ?? null, myAmt: myAmt ?? null });
+    }));
+    const pct = deptTotal ? (myTotal / deptTotal - 1) * 100 : null;
+    const title = `My bid — ${t.ref}`;
+    const info = [[t.title], [`${t.dept || ''}${t.office ? ' · ' + t.office : ''}`], [`Tender value: ${num(t.value) ? 'Rs. ' + t.value.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : 'not published'}   ·   Prepared on TenderOne ${new Date().toLocaleDateString('en-IN')}`]];
+    const fileBase = `bid-${String(t.ref || t.nit).replace(/[^\w-]+/g, '_')}`;
+    const r2 = (v) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v ?? '');
+    try {
+      if (kind === 'xlsx') {
+        toast('Preparing Excel file…');
+        await loadScript('/vendor/xlsx.mini.min.js');
+        const head = ['Item no.', 'Item', 'Qty', 'Unit', 'Department rate', 'Department amount', 'Past winners (median rate)', 'My rate', 'My amount'];
+        const aoa = [[title], ...info, [], head,
+          ...rows.map((r) => [r.no, r.name, r2(r.qty), r.unit, r2(r.rate), r2(r.amt), r2(r.past), r2(r.my), r2(r.myAmt)]),
+          [], ['', 'TOTAL', '', '', '', r2(deptTotal), '', '', r2(myTotal)],
+          ['', pct === null ? '' : `My bid is ${Math.abs(pct).toFixed(2)}% ${pct <= 0 ? 'below' : 'above'} the department's estimate`]];
+        const ws = window.XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = [{ wch: 14 }, { wch: 60 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 14 }, { wch: 18 }];
+        const wb = window.XLSX.utils.book_new();
+        window.XLSX.utils.book_append_sheet(wb, ws, 'My bid');
+        window.XLSX.writeFile(wb, fileBase + '.xlsx');
+      } else {
+        toast('Preparing PDF…');
+        await loadScript('/vendor/jspdf.umd.min.js');
+        await loadScript('/vendor/jspdf.plugin.autotable.min.js');
+        const doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+        // Standard PDF fonts have no ₹ sign, so amounts are written as "Rs.".
+        const rs = (v) => (typeof v === 'number' ? 'Rs. ' + v.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '');
+        doc.setFontSize(14); doc.text(title, 40, 40);
+        doc.setFontSize(9);
+        doc.text(doc.splitTextToSize(info.map((x) => x[0]).join('\n'), 760), 40, 58);
+        doc.autoTable({
+          startY: 100,
+          head: [['No.', 'Item', 'Qty', 'Unit', 'Dept. rate', 'Dept. amount', 'Past winners', 'My rate', 'My amount']],
+          body: rows.map((r) => [r.no, r.name.slice(0, 160), r.qty, r.unit, rs(r.rate), rs(r.amt), rs(r.past), rs(r.my), rs(r.myAmt)]),
+          foot: [['', 'TOTAL', '', '', '', rs(deptTotal), '', '', rs(myTotal)]],
+          styles: { fontSize: 7.5, cellPadding: 3, overflow: 'linebreak' },
+          headStyles: { fillColor: [79, 70, 229] }, footStyles: { fillColor: [229, 247, 239], textColor: [4, 120, 87] },
+          columnStyles: { 1: { cellWidth: 250 }, 2: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'right' }, 7: { halign: 'right' }, 8: { halign: 'right' } },
+          margin: { left: 40, right: 40 }
+        });
+        const y = doc.lastAutoTable.finalY + 20;
+        doc.setFontSize(10);
+        doc.text(`My bid total: ${rs(myTotal)}${pct === null ? '' : `  (${Math.abs(pct).toFixed(2)}% ${pct <= 0 ? 'below' : 'above'} the department's estimate)`}`, 40, y);
+        if (G.rec) doc.text(`Suggested bid from past winners: ${rs(Math.round(G.rec))}`, 40, y + 16);
+        doc.save(fileBase + '.pdf');
+      }
+    } catch (err) {
+      toast('Download failed — please try again');
+    }
   }
 
   function closeDrawer({ fromHistory = false } = {}) {
@@ -865,7 +1074,8 @@
       scope = `${t.work || t.cat.toLowerCase()} work in ${t.district}`;
     }
     const sum = summarize(list);
-    return sum.count ? { ...sum, scope } : null;
+    const pcts = list.map(winPct).filter((p) => p !== null).sort((a, b) => a - b);
+    return sum.count ? { ...sum, scope, pcts } : null;
   }
 
   async function renderSimilar(t) {
@@ -873,6 +1083,7 @@
     if (!box) return;
     const sim = await similarResults(t);
     if ($('tpSimilar') !== box) return;
+    if (G.t === t) { G.sim = sim; updateBidGuide(); }
     if (!sim || sim.median === null) { box.hidden = true; return; }
     box.hidden = false;
     box.innerHTML = `<h3>How similar tenders were won</h3>
@@ -1054,6 +1265,7 @@
       const cell = document.querySelector(`[data-past="${gi}:${ii}"]`);
       if (!hit || !cell) return;
       matched++;
+      if (G.f === f) G.past.set(`${gi}:${ii}`, hit.l1[2]);
       // Middle half of winning rates: some bidders quote ₹1 on a few items, so skip the extremes.
       const [, lo, med, hi] = hit.l1;
       const vsDept = num(i.rate) ? (med / i.rate - 1) * 100 : null;
@@ -1068,6 +1280,7 @@
     }
     const ratio = estMatched ? pastMatched / estMatched : null;
     const cover = estAll ? estMatched / estAll * 100 : 0;
+    if (G.f === f) { G.ratio = ratio; G.cover = cover; updateBidGuide(); G.recalc?.(); }
     box.innerHTML = `<div class="pricing">
       <div><span>Items with past winning rates</span><strong>${fmtInt(matched)} of ${fmtInt(total)}</strong><small>${cover.toFixed(0)}% of the work by value</small></div>
       ${ratio ? `<div><span>Past winners priced these items at</span><strong>${Math.abs((ratio - 1) * 100).toFixed(1)}% ${ratio < 1 ? 'below' : 'above'}</strong><small>the department's rates (median L1 rates)</small></div>` : ''}
