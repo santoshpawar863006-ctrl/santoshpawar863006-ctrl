@@ -19,7 +19,7 @@ Every 6 hours `.github/workflows/collect-history.yml` runs `collect_history.py`:
 
 `.github/workflows/scheduler.yml` starts these collectors on time (GitHub's own cron is often hours late for small projects) and keeps itself running; the cron lines in each workflow are only a backup.
 
-The website is private: without the sign-in cookie every address answers a plain 404. The sign-in page is at a secret address (only its SHA-256 is in `worker/index.js`); it asks for one password (only a double SHA-256 of it is stored) and remembers each device for a year with an HttpOnly cookie. `/logout` signs a device out. The history collector runs once a day (22:00 UTC).
+The website is private: without the sign-in cookie every address answers a plain 404. The sign-in page is at a secret address (only its SHA-256 is in `worker/index.js`); it asks for one password (only a double SHA-256 of it is stored) and remembers each device for a year with an HttpOnly cookie. `/logout` signs a device out. Lost the password or the sign-in address? Run `python reset_login.py`, which prints a new pair and updates the hashes, then push `worker/index.js` to main. The history collector runs once a day (22:00 UTC).
 
 Data commits carry a skip-build marker: the website reads the data straight from GitHub, so only code changes need a redeploy.
 
