@@ -1,6 +1,6 @@
 'use strict';
 
-// Hourly collector commits fresh tenders.json / health.json here; deployed assets are the fallback.
+// Hourly collector commits fresh data files here; deployed assets are the fallback.
 const RAW_BASES = [
   'https://raw.githubusercontent.com/santoshpawar863006-ctrl/santoshpawar863006-ctrl/main/public'
 ];
@@ -35,7 +35,7 @@ async function proxyRaw(filename, ctx, ttl = 60, env = null) {
     'X-KPPP-Data-Source': source
   });
 
-  // Stream the large tenders.json — do NOT JSON.parse the whole ~9MB body (CPU/memory limit).
+  // Stream the data files as they are — do NOT JSON.parse them here (CPU/memory limit).
   const tryUpstream = async (sourceUrl) => {
     const upstream = await fetch(sourceUrl, {
       headers: { Accept: 'application/json' },
@@ -395,7 +395,7 @@ export default {
 
     if (request.method !== 'GET') return json({ success: false, message: 'Method not allowed.' }, 405);
 
-    if (['/tenders-lite.json', '/tenders.json', '/results-lite.json', '/rates-lite.json'].includes(url.pathname)) {
+    if (['/tenders-lite.json', '/results-lite.json', '/rates-lite.json'].includes(url.pathname)) {
       return proxyRaw(url.pathname.slice(1), ctx, 300, env);
     }
     if (url.pathname === '/history-index.json') return historyFile('index.json', ctx, 600);

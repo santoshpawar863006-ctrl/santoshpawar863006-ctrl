@@ -499,7 +499,8 @@ def main():
     RATES.write_text(json.dumps({
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "tenders": sum(1 for nit in items_by_nit if (cache.get(nit) or {}).get("cat") == "WORKS"),
-        "items": rates,
+        # The tender page only reads the winning-rate spread and how many tenders it comes from.
+        "items": {key: {"l1": g["l1"], "tenders": g["tenders"]} for key, g in rates.items()},
     }, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     with_bids = sum(1 for r in results if r.get("bidders"))
     pages = sum(1 for _ in AWARDS.glob("*.json"))

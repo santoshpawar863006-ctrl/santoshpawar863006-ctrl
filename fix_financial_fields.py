@@ -10,7 +10,6 @@ AMOUNT_KEYS = (
     "estimatedTenderValue",
     "tenderValue",
     "estimatedCost",
-    "provisionalAmount",
     "amount",
 )
 EMD_KEYS = (
