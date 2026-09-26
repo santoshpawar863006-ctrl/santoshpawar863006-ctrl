@@ -381,7 +381,6 @@
     const left = timeLeft(t._close);
     const closeText = t._close ? dateFmt.format(new Date(t._close)) : 'Not given';
     const saved = S.saved.has(t.id);
-    const tk = 'https://www.google.com/search?q=' + encodeURIComponent(`site:tenderkart.in "${t.ref}"`);
     const place = [t.office, t.district].filter(Boolean).join(' · ');
     const d = $('drawer');
     d.innerHTML = `
@@ -427,7 +426,6 @@
           ${notePanel('t:' + t.id)}
           <div class="actions col">
             <a class="btn primary" href="https://kppp.karnataka.gov.in/" target="_blank" rel="noopener">Bid on KPPP portal ↗</a>
-            <a class="btn" href="${esc(tk)}" target="_blank" rel="noopener">Search on TenderKart ↗</a>
           </div>
         </aside>
         <main class="tp-main">
