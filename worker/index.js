@@ -360,6 +360,28 @@ async function contractorRecord(name, ctx) {
   return response;
 }
 
+// Item-wise Excel files (one per month) live in the "itemwise" GitHub release, not the repository.
+async function itemwiseFile(file, ctx) {
+  const cache = caches.default;
+  const cacheKey = new Request(`https://kppp-itemwise.local/v1/${file}`);
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+  let upstream;
+  try {
+    upstream = await fetch(`https://github.com/santoshpawar863006-ctrl/santoshpawar863006-ctrl/releases/download/itemwise/${file}`, { redirect: 'follow' });
+  } catch {}
+  if (!upstream || !upstream.ok) return json({ success: false, message: 'This item-wise file is not ready yet.' }, 404, 'public, max-age=120');
+  const response = new Response(upstream.body, {
+    headers: {
+      'Content-Type': HISTORY_TYPES.xlsx,
+      'Content-Disposition': `attachment; filename="${file}"`,
+      'Cache-Control': 'private, max-age=21600'
+    }
+  });
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+}
+
 function ageHours(value) {
   const ms = Date.parse(String(value || ''));
   if (!Number.isFinite(ms)) return null;
@@ -502,6 +524,8 @@ export default {
     }
     if (url.pathname === '/history-index.json') return historyFile('index.json', ctx, 600);
     if (url.pathname === '/similar-lite.json') return historyFile('similar.json', ctx, 1800);
+    const itemwise = url.pathname.match(/^\/downloads\/(itemwise-\d{4}-\d{2}\.xlsx)$/);
+    if (itemwise) return itemwiseFile(itemwise[1], ctx);
     const download = url.pathname.match(/^\/downloads\/(works-[a-z0-9-]+\.xlsx)$/);
     if (download) return historyFile(`excel/${download[1]}`, ctx, 1800, true);
     if (url.pathname === '/health.json') return proxyRaw('health.json', ctx, 30, env);

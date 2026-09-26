@@ -1065,7 +1065,13 @@
         ${years.map((f) => `<a class="dl" href="/downloads/${esc(f.file)}" download><b>${esc(f.year)}</b><span>${fmtInt(f.tenders)} tenders · ${fmtInt(f.bids)} bids</span><small>${mb(f.bytes)}</small></a>`).join('')}
         ${rates ? `<a class="dl rates" href="/downloads/${esc(rates.file)}" download><b>Item rates</b><span>${fmtInt(rates.items)} BOQ items · past winning rates</span><small>${mb(rates.bytes)}</small></a>` : ''}
       </div>
-      <p class="note">Each year file has two sheets: <b>Tenders</b> (one row per tender) and <b>All bids</b> (one row per bidder). New tenders are compared with this full history on their tender page.</p>`;
+      <p class="note">Each year file has two sheets: <b>Tenders</b> (one row per tender) and <b>All bids</b> (one row per bidder). New tenders are compared with this full history on their tender page.</p>
+      ${(idx.itemwise || []).length ? `<h3 style="margin-top:18px">Item-wise bids — every bidder's rate for every item</h3>
+        <p class="muted-p">One Excel file per month: each BOQ item of each tender with the department's rate and the L1 (winner) to L5 bidders' names, quoted rates and % against the department's rate.</p>
+        ${Object.entries(idx.itemwise.reduce((acc, f) => { (acc[f.month.slice(0, 4)] ||= []).push(f); return acc; }, {})).sort((a, b) => b[0].localeCompare(a[0])).map(([year, files]) => `
+          <details class="iw-year"${year === String(new Date().getFullYear()) ? ' open' : ''}><summary><b>${esc(year)}</b> <span class="count">${files.length} months</span></summary>
+            <div class="dl-list">${files.sort((a, b) => b.month.localeCompare(a.month)).map((f) => `<a class="dl" href="/downloads/${esc(f.file)}" download><b>${esc(new Date(f.month + '-01T00:00:00').toLocaleString('en-IN', { month: 'long' }))}</b><span>${fmtInt(f.tenders)} tenders · ${fmtInt(f.rows)} items</span><small>${mb(f.bytes)}</small></a>`).join('')}</div>
+          </details>`).join('')}` : ''}`;
   }
 
   function filterResults(f) {

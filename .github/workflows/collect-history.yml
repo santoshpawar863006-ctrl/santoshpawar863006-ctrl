@@ -71,7 +71,18 @@ jobs:
             find history -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           fi
       - name: Merge And Build Excel Files
+        env:
+          ITEMWISE_OUT: itemwise-out
         run: python collect_history.py build history $(ls -d parts/part-* 2>/dev/null)
+      - name: Upload Item-wise Excel Files
+        # Big monthly files go to a GitHub release (downloads), not into the repository.
+        if: hashFiles('itemwise-out/*.xlsx') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view itemwise -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
+            gh release create itemwise -R "$GITHUB_REPOSITORY" --title "Item-wise bids" --notes "Every bidder's rate for every BOQ item, one Excel file per month. Updated automatically."
+          gh release upload itemwise itemwise-out/*.xlsx -R "$GITHUB_REPOSITORY" --clobber
       - name: Save History Snapshot
         working-directory: history
         run: |
