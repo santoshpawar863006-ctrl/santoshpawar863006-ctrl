@@ -524,6 +524,7 @@ export default {
     }
     if (url.pathname === '/history-index.json') return historyFile('index.json', ctx, 600);
     if (url.pathname === '/similar-lite.json') return historyFile('similar.json', ctx, 1800);
+    if (url.pathname === '/leaders.json') return historyFile('leaders.json', ctx, 1800);
     const itemwise = url.pathname.match(/^\/downloads\/(itemwise-\d{4}-\d{2}\.xlsx)$/);
     if (itemwise) return itemwiseFile(itemwise[1], ctx);
     const download = url.pathname.match(/^\/downloads\/(works-[a-z0-9-]+\.xlsx)$/);

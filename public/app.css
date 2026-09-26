@@ -186,6 +186,9 @@ td.my input:focus{outline:2px solid var(--brand);border-color:transparent}
 .dl small{font-size:12px;color:var(--muted)}
 .dl b::after{content:" ↓";font-size:14px}
 .dl.rates{background:var(--ok-soft)}
+.leaders{margin-bottom:14px}
+.lead-filters{margin:10px 0}
+@media (max-width:760px){.lead th:nth-child(6),.lead td:nth-child(6),.lead th:first-child,.lead td:first-child{display:none}.lead td,.lead th{padding-left:8px;padding-right:8px}}
 .iw-year{margin-top:10px}
 .iw-year>summary{cursor:pointer;font-size:15px}
 .iw-year .dl-list{margin-top:8px}
