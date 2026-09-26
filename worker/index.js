@@ -307,14 +307,14 @@ async function awardDetail(nitId, ctx) {
 
 // Works history (collect_history.py): comparison figures and Excel downloads, streamed as-is.
 const HISTORY_TYPES = { json: 'application/json; charset=utf-8', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
-async function historyFile(path, ctx, ttl, download = false) {
+async function historyFile(path, ctx, ttl, download = false, branch = 'history') {
   const cache = caches.default;
-  const cacheKey = new Request(`https://kppp-history.local/v1/${path}`);
+  const cacheKey = new Request(`https://kppp-history.local/v1/${branch}/${path}`);
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
   let upstream;
   try {
-    upstream = await fetch(`${REPO_RAW}/history/${path}`, { cf: { cacheTtl: ttl, cacheEverything: true } });
+    upstream = await fetch(`${REPO_RAW}/${branch}/${path}`, { cf: { cacheTtl: ttl, cacheEverything: true } });
   } catch {}
   if (!upstream || !upstream.ok) return json({ success: false, message: 'Past works history is still being collected.' }, 404, 'public, max-age=120');
   const ext = path.split('.').pop();
@@ -547,6 +547,7 @@ export default {
     if (url.pathname === '/leaders.json') return historyFile('leaders.json', ctx, 1800);
     if (url.pathname === '/bidders.json') return historyFile('bidders.json', ctx, 1800);
     if (url.pathname === '/quick.json') return historyFile('quick.json', ctx, 1800);
+    if (url.pathname === '/reserved.json') return historyFile('details/reserved.json', ctx, 600, false, 'data');
     const bids = url.pathname.match(/^\/api\/tender-bids\/(\d+)$/);
     if (bids) return tenderBids(bids[1], url.searchParams.get('m'), ctx);
     const itemwise = url.pathname.match(/^\/downloads\/(itemwise-\d{4}-\d{2}\.xlsx)$/);

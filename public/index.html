@@ -15,8 +15,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=20260926q">
-<script src="/app.js?v=20260926t" defer></script>
+<link rel="stylesheet" href="/app.css?v=20260926r">
+<script src="/app.js?v=20260926u" defer></script>
 </head>
 <body>
 <header class="hero">
@@ -86,8 +86,13 @@
       </select></div>
       <div class="select"><select id="fAccess" aria-label="Who can bid">
         <option value="">Open &amp; reserved</option>
+        <option value="mine">I can bid (SC): open + SC reserved</option>
+        <option value="SC">SC reserved only</option>
         <option value="Open">Open only</option>
-        <option value="Reserved">Reserved only</option>
+        <option value="Reserved">All reserved</option>
+        <option value="ST">ST reserved</option>
+        <option value="Cat-1">Category I reserved</option>
+        <option value="Cat-2A">Category II-A reserved</option>
       </select></div>
       <div class="select"><select id="fBidTime" aria-label="Time to bid">
         <option value="">Any time to bid</option>
@@ -118,6 +123,10 @@
     </div>
   </section>
 
+  <button class="sc-banner" id="scBanner" type="button" hidden>
+    <b><span id="scCount">0</span> tenders reserved for SC contractors</b><span id="scSoon"></span>
+    <span class="spacer"></span><span class="sc-go">Show them →</span>
+  </button>
   <div class="results-head">
     <h2 id="resultTitle">Loading tenders…</h2>
     <div class="chips" id="chips"></div>

@@ -18,7 +18,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
+import collections
 import gzip
+import re
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -112,6 +114,64 @@ def fetch(session, cat, nit, old):
     record = {"nit": str(nit), "cat": cat, "fetched": now, "full": strip({k: full.get(k) for k in KEEP}),
               "files": files, "changes": changes[-20:]}
     return {k: v for k, v in record.items() if v not in (None, [])}
+
+
+# ---------- Who a reserved tender is for (SC / ST / Category-I / II-A / II-B) ----------
+# KPPP only says "Reserved"; the category is written in the title, conditions or document names.
+GEN = re.compile(r'Scheduled\s+Caste\s*/\s*Scheduled\s+Tribe\s*/\s*other\s+reserved\s+category', re.I)
+CATS = [
+    ("SC", re.compile(r'\bS\.?\s?C\.?(?=[\s)\-,/]|$)|Scheduled\s+Castes?', re.I)),
+    ("ST", re.compile(r'\bS\.?\s?T\.?(?=[\s)\-,/]|$)|Scheduled\s+Tribes?', re.I)),
+    ("Cat-1", re.compile(r'\bCAT(?:EGORY|AGORY)?[\s\-:.(]*(?:I|1)\b(?![\s\-(]*[AB]\b)', re.I)),
+    ("Cat-2A", re.compile(r'\b(?:CAT(?:EGORY|AGORY)?[\s\-:.(]*)?(?:II|2)[\s\-(]*A\b', re.I)),
+    ("Cat-2B", re.compile(r'\b(?:CAT(?:EGORY|AGORY)?[\s\-:.(]*)?(?:II|2)[\s\-(]*B\b', re.I)),
+]
+HINT = re.compile(r'reserv|categor|catagor|caste|tribe|belong|only|certificate', re.I)
+
+def reservation(full):
+    """SC / ST / Cat-1 / Cat-2A / Cat-2B for a reserved tender, from its title, conditions and document names."""
+    title = (full.get("tenderSchedule") or {}).get("title") or ""
+    texts = [title]
+    texts += [e.get("description") or "" for e in full.get("generalCriterionList") or [] if isinstance(e, dict)]
+    texts += [e.get("description") or "" for e in full.get("tenderEligibilityCriterionList") or [] if isinstance(e, dict)]
+    texts += [x.get("documentName") or "" for x in full.get("tenderCriterionDocumentList") or [] if isinstance(x, dict)]
+    votes = collections.Counter()
+    for text in texts:
+        text = GEN.sub(" ", text)
+        if not HINT.search(text):
+            continue
+        found = {name for name, rx in CATS if rx.search(text)}
+        if len(found) == 1:  # a sentence naming several categories is a general rule, not this tender's
+            votes[found.pop()] += 1
+    if not votes:
+        return None
+    top = max(votes.values())
+    return "/".join(n for n, _ in CATS if votes[n] == top)
+
+
+def write_reserved():
+    """details/reserved.json: {nit: category} for every reserved tender seen, kept after it closes so past results can be matched."""
+    path = STORE / "reserved.json"
+    known = (load_json_file(path) or {}).get("tenders") or {}
+    for file in STORE.glob("*/*.json"):
+        try:
+            record = json.loads(file.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        full = record.get("full") or {}
+        if (full.get("noticeInvitingTenderDTO") or {}).get("invitingStrategyText") != "Reserved":
+            continue
+        known[str(record.get("nit"))] = reservation(full) or "Reserved"
+    path.write_text(json.dumps({"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "tenders": known},
+                               separators=(",", ":")), encoding="utf-8")
+    return len(known)
+
+
+def load_json_file(path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def load_rates():
@@ -219,6 +279,7 @@ def main():
     rates = load_rates()
     if rates:
         print(f"Past item rates added or updated for {add_past_rates(rates)} works tenders ({len(rates)} items known)", flush=True)
+    print(f"Reserved tenders on record: {write_reserved()}", flush=True)
     stored = sum(1 for _ in STORE.glob("*/*.json"))
     print(f"Saved {ok}, failed {failed}, {changed} with new changes. {stored} of {len(wanted)} live tenders stored "
           f"({int(time.monotonic() - started)}s).")

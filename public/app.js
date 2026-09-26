@@ -94,11 +94,27 @@
     return t;
   }
 
+  // Who each reserved tender is for (SC / ST / Cat-1 / Cat-2A), read from its KPPP conditions by collect_details.py.
+  const MY_CAT = 'SC';
+  let reserved = new Map();
+  const resvHas = (t, cat) => Boolean(t.resv && t.resv.split('/').includes(cat));
+  const resvLabel = (v) => (v === 'Reserved' ? 'Reserved' : `${v.replace('Cat-1', 'Category I').replace('Cat-2A', 'Category II-A').replace('Cat-2B', 'Category II-B')} reserved`);
+  function markReserved() { for (const t of S.all) t.resv = t.access === 'Reserved' ? (reserved.get(String(t.nit)) || 'Reserved') : null; }
+  function loadReserved() {
+    fetch('/reserved.json').then((r) => (r.ok ? r.json() : null)).then((d) => {
+      if (!d?.tenders) return;
+      reserved = new Map(Object.entries(d.tenders));
+      if (S.all?.length) { markReserved(); updateCounts(); apply({ keepScroll: true }); }
+      if (R.all && R.mode === 'results') applyResults();
+    }).catch(() => {});
+  }
+
   function ingest(payload) {
     const now = Date.now();
     S.generatedAt = payload.generated_at || null;
     S.all = (payload.tenders || []).map(prepare).filter((t) => !t._close || t._close > now);
     S.byId = new Map(S.all.map((t) => [t.id, t]));
+    markReserved();
     buildFilterOptions();
     updateCounts();
     updateLive();
@@ -120,6 +136,7 @@
   }
 
   async function load() {
+    loadReserved();
     // Show the last copy instantly on repeat visits, then swap in fresh data.
     const network = fetch(DATA_URL, { cache: 'no-cache' });
     network.catch(() => {}); // handled below; avoids an "unhandled" warning when offline
@@ -168,6 +185,13 @@
     $('cGoods').textContent = fmtInt(c.GOODS);
     $('cServices').textContent = fmtInt(c.SERVICES);
     $('cSoon').textContent = fmtInt(c.soon);
+    const mine = S.all.filter((t) => resvHas(t, MY_CAT));
+    $('scBanner').hidden = !mine.length;
+    if (mine.length) {
+      const soon = mine.filter((t) => t._close && t._close <= Date.now() + 7 * DAY).length;
+      $('scCount').textContent = fmtInt(mine.length);
+      $('scSoon').textContent = soon ? ` · ${fmtInt(soon)} closing in 7 days` : '';
+    }
   }
 
   function updateLive() {
@@ -205,7 +229,11 @@
       if (S.forMe && !matchesProfile(t)) continue;
       if (f.district && t.district !== f.district) continue;
       if (f.dept && t.dept !== f.dept) continue;
-      if (f.access && t.access !== f.access) continue;
+      if (f.access) {
+        if (f.access === 'mine') { if (!(t.access === 'Open' || resvHas(t, MY_CAT))) continue; }
+        else if (f.access === 'Open' || f.access === 'Reserved' || f.access === 'Restricted') { if (t.access !== f.access) continue; }
+        else if (!resvHas(t, f.access)) continue;
+      }
       if (f.vmin !== null || f.vmax !== null) {
         const v = num(t.value);
         if (v === null) continue;
@@ -244,7 +272,7 @@
     if (f.dept) chips.push(['fDept', f.dept.length > 34 ? f.dept.slice(0, 32) + '…' : f.dept]);
     if ($('fValue').value) chips.push(['fValue', $('fValue').selectedOptions[0].text]);
     if (f.closing) chips.push(['fClosing', `Closing in ${f.closing} days`]);
-    if (f.access) chips.push(['fAccess', f.access]);
+    if (f.access) chips.push(['fAccess', $('fAccess').selectedOptions[0].text]);
     if (f.bidTime) chips.push(['fBidTime', $('fBidTime').selectedOptions[0].text]);
     if (S.savedOnly) chips.push(['saved', 'Saved only']);
     if (S.forMe) chips.push(['forMe', 'For me']);
@@ -327,7 +355,7 @@
     return `<article class="card" data-id="${esc(t.id)}" tabindex="0" aria-label="${esc(t.title)}">
       <div class="card-top">
         <span class="badge ${esc(t.cat)}">${esc(t.cat)}</span>
-        ${t.access && t.access !== 'Open' ? `<span class="badge reserved">${esc(t.access)}</span>` : ''}
+        ${t.access && t.access !== 'Open' ? `<span class="badge reserved${resvHas(t, MY_CAT) ? ' mine' : ''}">${esc(t.resv ? resvLabel(t.resv) : t.access)}</span>` : ''}
         ${t.work ? `<span class="badge soft">${esc(t.work)}</span>` : ''}
         ${quickBadge(bidDays(t._pub, t._close))}
         ${left ? `<span class="due ${left.tone}">${esc(left.label)}</span>` : ''}
@@ -413,7 +441,7 @@
         <div class="wrap">
           <div class="row">
             <span class="badge ${esc(t.cat)}">${esc(t.cat)}</span>
-            ${t.access ? `<span class="badge ${t.access === 'Open' ? 'soft' : 'reserved'}">${esc(t.access)} tender</span>` : ''}
+            ${t.access ? `<span class="badge ${t.access === 'Open' ? 'soft' : 'reserved'}${resvHas(t, MY_CAT) ? ' mine' : ''}">${esc(t.resv ? resvLabel(t.resv) : t.access + ' tender')}</span>` : ''}
             ${t.work ? `<span class="badge soft">${esc(t.work)}</span>` : ''}
           </div>
           <h2 id="dTitle">${esc(t.title)}</h2>
@@ -1380,7 +1408,7 @@
     return `<details class="rrow">
       <summary>
         <div class="rmain">
-          <div class="card-top"><span class="badge ${esc(r.cat)}">${esc(r.cat)}</span>${r.work ? `<span class="badge soft">${esc(r.work)}</span>` : ''}${quickBadge(bidDays(Date.parse(r.published), Date.parse(r.closed)))}${when ? `<span class="due">Awarded ${esc(when)}</span>` : ''}</div>
+          <div class="card-top"><span class="badge ${esc(r.cat)}">${esc(r.cat)}</span>${r.work ? `<span class="badge soft">${esc(r.work)}</span>` : ''}${reserved.get(String(r.nit)) ? `<span class="badge reserved${reserved.get(String(r.nit)).split('/').includes(MY_CAT) ? ' mine' : ''}">${esc(resvLabel(reserved.get(String(r.nit))))}</span>` : ''}${quickBadge(bidDays(Date.parse(r.published), Date.parse(r.closed)))}${when ? `<span class="due">Awarded ${esc(when)}</span>` : ''}</div>
           <h3>${esc(r.title)}</h3>
           <div class="meta">${pinIcon}<span>${esc([r.district, r.dept].filter(Boolean).join(' · ') || r.office || '')}</span></div>
           ${hitLine}
@@ -2343,6 +2371,7 @@
   });
   for (const id of ['fDistrict', 'fDept', 'fValue', 'fAccess', 'fBidTime', 'fSort']) $(id).addEventListener('change', () => apply({ keepScroll: true }));
   $('fClosing').addEventListener('change', () => { S.soon = 0; apply({ keepScroll: true }); });
+  $('scBanner').addEventListener('click', () => { $('fAccess').value = MY_CAT; $('fSort').value = 'closing'; apply(); });
   document.querySelectorAll('.stat[data-cat]').forEach((el) => el.addEventListener('click', () => {
     S.cat = el.dataset.cat; S.soon = 0; $('fClosing').value = ''; apply();
   }));

@@ -600,3 +600,12 @@ dialog.wide{width:min(720px,calc(100% - 24px));max-height:calc(100vh - 40px)}
 .past-cols>.panel{margin:0}
 @media (max-width:760px){.past-cols{grid-template-columns:1fr}}
 #awardTender{display:grid;gap:16px}
+
+/* SC reserved */
+.badge.reserved.mine{background:#e6f6ec;color:#0d6b33;border-color:#8fd3a8;font-weight:700}
+[data-theme="dark"] .badge.reserved.mine{background:#123524;color:#7fe0a4;border-color:#2c6b47}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .badge.reserved.mine{background:#123524;color:#7fe0a4;border-color:#2c6b47}}
+.sc-banner{display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%;margin:14px 0 4px;padding:12px 16px;border-radius:var(--radius);border:1px solid #8fd3a8;background:#e6f6ec;color:#0d6b33;font:inherit;text-align:left;cursor:pointer}
+.sc-banner .sc-go{font-weight:700}
+[data-theme="dark"] .sc-banner{background:#123524;color:#7fe0a4;border-color:#2c6b47}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .sc-banner{background:#123524;color:#7fe0a4;border-color:#2c6b47}}
