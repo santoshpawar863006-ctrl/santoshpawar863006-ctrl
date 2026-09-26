@@ -289,16 +289,26 @@ def build_contractors(results, root):
 
 
 def write_bidders_index(people, root):
-    """All bidders for the Bidders tab: [name, bids, wins, value won, latest bid, top districts, usual winning %]."""
+    """All bidders for the Bidders tab: [name, bids, wins, value won, latest bid, top districts, usual winning %, per district/year]."""
+    all_districts = sorted({k.split("|")[0] for p in people.values() for k in p["dy"]})
+    all_years = sorted({k.split("|")[1] for p in people.values() for k in p["dy"]})
+    d_index = {d: i for i, d in enumerate(all_districts)}
+    y_index = {y: i for i, y in enumerate(all_years)}
     rows = []
     for key, p in people.items():
         dates = [d for d, _ in p["recent"] if d]
         districts = [k for k, _ in sorted(p["district"].items(), key=lambda kv: -kv[1][0])[:3]]
         wp = sorted(p["wpct"])
+        # Bids, wins and value won per district and year, flat: [district index, year index, bids, wins, value, ...]
+        split = []
+        for k, (bids, wins, value) in p["dy"].items():
+            d, y = k.split("|")
+            split += [d_index[d], y_index[y], bids, wins, round(value)]
         rows.append([max(p["names"], key=p["names"].get), p["bids"], p["wins"], round(p["value"]),
-                     max(dates)[:10] if dates else None, districts, round(wp[len(wp) // 2], 1) if wp else None])
+                     max(dates)[:10] if dates else None, districts, round(wp[len(wp) // 2], 1) if wp else None, split])
     rows.sort(key=lambda r: (-r[2], -r[1]))
     (root / "bidders.json").write_text(json.dumps({"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                                    "districts": all_districts, "years": all_years,
                                                     "bidders": rows}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
@@ -335,7 +345,7 @@ def write_tender_bids(store, root):
 def split_name(name):
     """'PERSON (1)( FIRM )' -> (firm, person), like splitName() in public/app.js."""
     m = re.match(r"^(.*?)\s*(?:\(\s*\d+\s*\)\s*)?\(\s*(.+?)\s*\)\s*$", name or "")
-    if m and m.group(1) and m.group(2):
+    if m and m.group(1) and m.group(2) and not m.group(2).isdigit():
         return m.group(2), re.sub(r"\s*\(\s*\d+\s*\)\s*$", "", m.group(1))
     return re.sub(r"\s*\(\s*\d+\s*\)\s*$", "", name or ""), ""
 

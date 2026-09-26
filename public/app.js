@@ -1097,12 +1097,15 @@
     if (!B.loading) {
       B.loading = fetch('/bidders.json').then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))).then((d) => {
         // [name, bids, wins, value, latest, districts, usual winning %]
-        B.all = (d.bidders || []).map(([name, bids, wins, value, last, districts, winPct]) => {
+        B.all = (d.bidders || []).map(([name, bids, wins, value, last, districts, winPct, split]) => {
           const who = splitName(name);
-          return { name, firm: who.firm, person: who.person, bids, wins, value, last, districts: districts || [], winPct, _hay: norm(name), _hayc: norm(name).replace(/ /g, '') };
+          return { name, firm: who.firm, person: who.person, bids, wins, value, last, districts: districts || [], winPct, split: split || [],
+            _sortName: who.firm.replace(/^[^A-Za-z]+/, '').toUpperCase(), _hay: norm(name), _hayc: norm(name).replace(/ /g, '') };
         });
-        const ds = [...new Set(B.all.flatMap((b) => b.districts))].sort();
-        $('bDistrict').innerHTML = '<option value="">All districts</option>' + ds.map((x) => `<option>${esc(x)}</option>`).join('');
+        B.districts = d.districts || [...new Set(B.all.flatMap((b) => b.districts))].sort();
+        B.years = d.years || [];
+        $('bDistrict').innerHTML = '<option value="">All districts</option>' + B.districts.map((x) => `<option>${esc(x)}</option>`).join('');
+        $('bYear').innerHTML = '<option value="">All years</option>' + B.years.slice().reverse().map((x) => `<option>${esc(x)}</option>`).join('');
         return B.all;
       }).catch((err) => { B.loading = null; throw err; });
     }
@@ -1112,21 +1115,42 @@
     if (!B.all) return;
     const terms = norm(B.q).trim().split(' ').filter(Boolean);
     const district = $('bDistrict').value;
+    const year = $('bYear').value;
     const min = Number($('bMin').value) || 0;
-    const list = B.all.filter((b) => (!district || b.districts.includes(district)) && b.bids >= min
-      && (!terms.length || terms.every((w) => b._hay.includes(w)) || b._hayc.includes(terms.join(''))));
+    // With a district or year chosen, count only the bids made there / then.
+    const di = district ? B.districts.indexOf(district) : -1;
+    const yi = year ? B.years.indexOf(year) : -1;
+    const view = (b) => {
+      if (di < 0 && yi < 0) return b;
+      if (!b.split.length) return (!district || b.districts.includes(district)) && !year ? b : { bids: 0 }; // older data without the split
+      let bids = 0, wins = 0, value = 0;
+      const s = b.split;
+      for (let i = 0; i < s.length; i += 5) {
+        if ((di < 0 || s[i] === di) && (yi < 0 || s[i + 1] === yi)) { bids += s[i + 2]; wins += s[i + 3]; value += s[i + 4]; }
+      }
+      return { bids, wins, value };
+    };
+    const list = [];
+    for (const b of B.all) {
+      if (terms.length && !(terms.every((w) => b._hay.includes(w)) || b._hayc.includes(terms.join('')))) continue;
+      const v = view(b);
+      if (!v.bids || v.bids < min) continue;
+      b.v = v;
+      list.push(b);
+    }
     const by = {
-      wins: (a, b) => b.wins - a.wins || b.bids - a.bids,
-      bids: (a, b) => b.bids - a.bids,
-      rate: (a, b) => (b.bids >= 5) - (a.bids >= 5) || b.wins / b.bids - a.wins / a.bids,
-      value: (a, b) => (b.value || 0) - (a.value || 0),
+      wins: (a, b) => b.v.wins - a.v.wins || b.v.bids - a.v.bids,
+      bids: (a, b) => b.v.bids - a.v.bids || b.v.wins - a.v.wins,
+      rate: (a, b) => (b.v.bids >= 5) - (a.v.bids >= 5) || b.v.wins / b.v.bids - a.v.wins / a.v.bids || b.v.bids - a.v.bids,
+      value: (a, b) => (b.v.value || 0) - (a.v.value || 0),
       latest: (a, b) => String(b.last || '').localeCompare(String(a.last || '')),
-      name: (a, b) => a.firm.localeCompare(b.firm)
+      name: (a, b) => a._sortName.localeCompare(b._sortName)
     }[$('bSort').value];
     list.sort(by);
     B.list = list; B.shown = 0;
     $('rLeaders').style.display = terms.length ? 'none' : ''; // searching: show the matches first
-    $('bTitle').innerHTML = `${fmtInt(list.length)} <span>bidders</span>`;
+    const where = [district, year].filter(Boolean).join(' · ');
+    $('bTitle').innerHTML = `${fmtInt(list.length)} <span>bidders${where ? ` in ${esc(where)}` : ''}</span>`;
     $('bList').innerHTML = list.length ? `<div class="table-wrap"><table class="lead bidders-table">
       <thead><tr><th>#</th><th>Bidder</th><th class="n">Bid</th><th class="n">Won</th><th class="n">Win rate</th><th class="n">Value won</th><th>Works in</th><th>Latest bid</th></tr></thead>
       <tbody id="bRows"></tbody></table></div>` : '<div class="empty"><strong>No bidders match.</strong>Try a different name or remove a filter.</div>';
@@ -1137,9 +1161,9 @@
     $('bRows')?.insertAdjacentHTML('beforeend', next.map((b, i) => `<tr>
       <td>${B.shown + i + 1}</td>
       <td><button type="button" class="linkish" data-contractor="${esc(b.name)}">${isWatched(b.name) ? '👁 ' : ''}${esc(b.firm)}</button>${b.person ? `<small class="who">${esc(b.person)}</small>` : ''}</td>
-      <td class="n">${fmtInt(b.bids)}</td><td class="n"><b>${fmtInt(b.wins)}</b></td>
-      <td class="n">${b.bids ? Math.round(b.wins / b.bids * 100) + '%' : ''}</td>
-      <td class="n">${b.value ? money(b.value) : '—'}</td>
+      <td class="n">${fmtInt(b.v.bids)}</td><td class="n"><b>${fmtInt(b.v.wins)}</b></td>
+      <td class="n">${b.v.bids ? Math.round(b.v.wins / b.v.bids * 100) + '%' : ''}</td>
+      <td class="n">${b.v.value ? money(b.v.value) : '—'}</td>
       <td><small>${esc(b.districts.join(', '))}</small></td>
       <td><small>${b.last ? esc(shortDate.format(new Date(b.last))) + ' ' + esc(b.last.slice(0, 4)) : ''}</small></td></tr>`).join(''));
     B.shown += next.length;
@@ -1375,7 +1399,7 @@
   function splitName(n) {
     const text = String(n || '').trim();
     const m = text.match(/^(.*?)\s*(?:\(\s*\d+\s*\)\s*)?\(\s*(.+?)\s*\)\s*$/);
-    return m && m[1] && m[2] ? { firm: m[2], person: m[1].replace(/\s*\(\s*\d+\s*\)\s*$/, '') } : { firm: text.replace(/\s*\(\s*\d+\s*\)\s*$/, ''), person: '' };
+    return m && m[1] && m[2] && !/^\d+$/.test(m[2]) ? { firm: m[2], person: m[1].replace(/\s*\(\s*\d+\s*\)\s*$/, '') } : { firm: text.replace(/\s*\(\s*\d+\s*\)\s*$/, ''), person: '' };
   }
   function bidderName(n) {
     const { firm, person } = splitName(n);
@@ -2419,7 +2443,7 @@
   applyText(readJSON(TEXT_KEY, false));
   $('textBtn').addEventListener('click', () => { const big = !document.documentElement.classList.contains('big-text'); applyText(big); writeJSON(TEXT_KEY, big); toast(big ? 'Bigger text on' : 'Normal text size'); });
   $('rMore').addEventListener('click', moreResults);
-  for (const id of ['bDistrict', 'bSort', 'bMin']) $(id).addEventListener('change', applyBidders);
+  for (const id of ['bDistrict', 'bYear', 'bSort', 'bMin']) $(id).addEventListener('change', applyBidders);
   $('bMore').addEventListener('click', moreBidders);
   $('biddersView').addEventListener('click', (e) => { const w = e.target.closest('[data-win]'); if (w) { e.preventDefault(); openContractor(w.dataset.win); } });
   $('rReset').addEventListener('click', () => {
