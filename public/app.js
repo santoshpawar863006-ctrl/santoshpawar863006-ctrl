@@ -1473,42 +1473,59 @@
   }
 
   async function openContractor(name) {
-    try { await loadResults(); } catch { toast('Past results are not available yet'); return; }
+    // Whole works history since 2023 (collect_history.py), plus the recent results loaded here.
+    const histReq = fetch(`/api/contractor?name=${encodeURIComponent(name)}`)
+      .then((r) => (r.ok ? r.json() : null)).then((j) => (j?.success ? j : null)).catch(() => null);
+    try { await loadResults(); } catch {}
     const key = nameKey(name);
     const rows = [];
-    for (const r of R.all) {
+    for (const r of R.all || []) {
       const mine = (r.bidders || []).find((b) => nameKey(b.name) === key);
       const won = nameKey(r.winner) === key || mine?.rank === 1;
-      if (mine || won) rows.push({ r, mine, won });
+      if (mine || won) rows.push({ r, mine, won, date: r._award || Date.parse(r.closed) || 0 });
     }
-    if (!rows.length) { toast('No results found for this contractor'); return; }
-    rows.sort((a, b) => b.r._award - a.r._award);
-    const display = rows.find((x) => x.mine)?.mine.name || rows[0].r.winner || name;
-    const wins = rows.filter((x) => x.won);
-    const withBids = rows.filter((x) => x.mine);
-    const winPcts = wins.map((x) => x.mine?.pct).filter((p) => p !== null && p !== undefined);
-    const allPcts = withBids.map((x) => x.mine.pct).filter((p) => p !== null && p !== undefined);
-    const wonValue = wins.reduce((n, x) => n + (num(x.mine?.amount) || num(x.r.value) || 0), 0);
-    const ranks = { 1: 0, 2: 0, 3: 0 };
-    for (const x of withBids) if (x.mine.rank) ranks[Math.min(3, x.mine.rank)]++;
-    const winRate = withBids.length ? wins.filter((x) => x.mine).length / withBids.length * 100 : null;
-    const medWin = median(winPcts);
-    const medAll = median(allPcts);
+    const H = await Promise.race([histReq, new Promise((res) => setTimeout(() => res(null), 7000))]);
+    if (!rows.length && !H) { toast('No results found for this contractor'); return; }
+    // Older tenders from the history that are not in the recent list.
+    const seen = new Set(rows.map((x) => x.r.nit));
+    for (const t of H?.recent || []) {
+      if (seen.has(t.nit)) continue;
+      rows.push({ r: { nit: t.nit, ref: t.ref, title: t.title, district: t.district, dept: t.dept, value: t.value, winner: t.winner, closed: t.closed },
+        mine: t.amount || t.rank ? { amount: t.amount, rank: t.rank, pct: t.pct } : null, won: !t.winner, date: Date.parse(t.closed) || 0, old: true });
+    }
+    rows.sort((a, b) => b.date - a.date);
+    const display = H?.name || rows.find((x) => x.mine?.name)?.mine.name || rows[0]?.r.winner || name;
+    const who = splitName(display);
 
-    // Competitors: who they meet most, and who finished ahead.
-    const rivals = new Map();
-    for (const x of withBids) {
-      for (const b of x.r.bidders) {
-        const k = nameKey(b.name);
-        if (k === key) continue;
-        const v = rivals.get(k) || { name: b.name, met: 0, ahead: 0 };
-        v.met++;
-        if (b.rank && x.mine.rank && x.mine.rank < b.rank) v.ahead++;
-        rivals.set(k, v);
-      }
-    }
-    const topRivals = [...rivals.values()].sort((a, b) => b.met - a.met).slice(0, 8);
-    const tenders = rows.map((x) => x.r);
+    // Recent-only figures, used when the history is not available yet.
+    const recent = rows.filter((x) => !x.old);
+    const wins = recent.filter((x) => x.won);
+    const withBids = recent.filter((x) => x.mine);
+    const pcts = (list) => list.map((x) => x.mine?.pct).filter((p) => p !== null && p !== undefined);
+    const stats = H ? {
+      bids: H.bids, wins: H.wins, value: H.value, winPct: H.winPct, bidPct: H.bidPct,
+      districts: H.districts, depts: H.depts, works: H.works,
+      rivals: (H.rivals || []).map(([n, met, ahead]) => ({ name: n, met, ahead })), scope: 'from all works results since 2023'
+    } : {
+      bids: withBids.length, wins: wins.length,
+      value: wins.reduce((n, x) => n + (num(x.mine?.amount) || num(x.r.value) || 0), 0),
+      winPct: median(pcts(wins)), bidPct: median(pcts(withBids)),
+      districts: countBy(recent.map((x) => x.r), 'district'), depts: countBy(recent.map((x) => x.r), 'dept'), works: countBy(recent.map((x) => x.r), 'work'),
+      rivals: (() => {
+        const m = new Map();
+        for (const x of withBids) for (const b of x.r.bidders || []) {
+          const k = nameKey(b.name); if (k === key) continue;
+          const v = m.get(k) || { name: b.name, met: 0, ahead: 0 }; v.met++; if (b.rank && x.mine.rank && x.mine.rank < b.rank) v.ahead++; m.set(k, v);
+        }
+        return [...m.values()].sort((a, b) => b.met - a.met).slice(0, 8);
+      })(), scope: 'recent results'
+    };
+    const winRate = stats.bids ? stats.wins / stats.bids * 100 : null;
+    const ranks = { 1: 0, 2: 0, 3: 0 };
+    for (const x of rows) if (x.mine?.rank) ranks[Math.min(3, x.mine.rank)]++;
+    const years = Object.entries(H?.years || {}).filter(([y]) => y);
+    const maxYear = Math.max(1, ...years.map(([, v]) => v[0]));
+    const barsOf = (title, entries) => bars(title, entries, Math.max(1, entries.reduce((n, [, c]) => n + c, 0)));
 
     lastFocus = document.activeElement;
     const d = $('drawer');
@@ -1516,49 +1533,69 @@
       <div class="tp-bar"><div class="wrap tp-bar-in">
         <button class="btn ghost" type="button" data-close>${icon.back} Back</button>
         <span class="spacer"></span>
+        <button class="btn" type="button" id="cpXlsx">${dlIcon} Excel</button>
         <button class="btn ${isWatched(display) ? 'on' : ''}" type="button" data-follow="${esc(display)}" aria-pressed="${isWatched(display)}">👁 ${isWatched(display) ? 'Watching' : 'Watch'}</button>
         <button class="btn" type="button" data-copy="${esc(display)}">Copy name</button>
       </div></div>
       <header class="tp-hero"><div class="wrap">
-        <div class="row"><span class="badge soft">Contractor profile</span></div>
-        <h2 id="dTitle">${esc(display)}</h2>
-        <p class="tp-sub">Based on ${fmtInt(rows.length)} awarded KPPP tenders in our records · ${fmtInt(wins.length)} won</p>
+        <div class="row"><span class="badge soft">Contractor profile</span>${H ? '<span class="badge soft">Full history</span>' : ''}</div>
+        <h2 id="dTitle">${esc(who.firm)}</h2>
+        <p class="tp-sub">${who.person ? `${esc(who.person)} · ` : ''}${fmtInt(stats.bids)} bids · ${fmtInt(stats.wins)} won · ${esc(stats.scope)}</p>
       </div></header>
       <div class="wrap cp">
         <div class="cp-kpis">
-          <div class="kpi"><span>Tenders won</span><strong>${fmtInt(wins.length)}</strong><small>${wonValue ? `worth ${money(wonValue)}` : ''}</small></div>
-          <div class="kpi"><span>Win rate</span><strong>${winRate === null ? '—' : winRate.toFixed(0) + '%'}</strong><small>${withBids.length ? `of ${fmtInt(withBids.length)} works tenders bid` : 'bid amounts not published'}</small></div>
-          <div class="kpi"><span>Usual winning bid</span><strong>${medWin === null ? '—' : pctText(medWin).replace(' estimate', '')}</strong><small>median when they won</small></div>
-          <div class="kpi"><span>Usual bid</span><strong>${medAll === null ? '—' : pctText(medAll).replace(' estimate', '')}</strong><small>median of all their bids</small></div>
+          <div class="kpi"><span>Tenders won</span><strong>${fmtInt(stats.wins)}</strong><small>${stats.value ? `worth ${money(stats.value)}` : ''}</small></div>
+          <div class="kpi"><span>Win rate</span><strong>${winRate === null ? '—' : winRate.toFixed(0) + '%'}</strong><small>${stats.bids ? `of ${fmtInt(stats.bids)} tenders bid` : 'bid amounts not published'}</small></div>
+          <div class="kpi"><span>Usual winning bid</span><strong>${stats.winPct == null ? '—' : pctText(stats.winPct).replace(' estimate', '')}</strong><small>median when they won</small></div>
+          <div class="kpi"><span>Usual bid</span><strong>${stats.bidPct == null ? '—' : pctText(stats.bidPct).replace(' estimate', '')}</strong><small>median of all their bids</small></div>
         </div>
-        ${withBids.length ? `<section class="panel"><h3>Where they finish</h3><div class="ranks">
+        <section class="panel"><h3>About</h3><dl class="facts">
+          ${who.person ? `<dt>Firm</dt><dd>${esc(who.firm)}</dd><dt>Registered person</dt><dd>${esc(who.person)}</dd>` : `<dt>Name</dt><dd>${esc(display)}</dd>`}
+          ${H?.first ? `<dt>First bid seen</dt><dd>${esc(shortDate.format(new Date(H.first)))} ${esc(H.first.slice(0, 4))}</dd>` : ''}
+          ${H?.last ? `<dt>Latest bid</dt><dd>${esc(shortDate.format(new Date(H.last)))} ${esc(H.last.slice(0, 4))}</dd>` : ''}
+          ${stats.districts[0] ? `<dt>Works mostly in</dt><dd>${esc(stats.districts.slice(0, 3).map(([k]) => k).join(', '))}</dd>` : ''}
+          ${stats.works[0] ? `<dt>Main type of work</dt><dd>${esc(stats.works.slice(0, 2).map(([k]) => k).join(', '))}</dd>` : ''}
+          ${stats.depts[0] ? `<dt>Main department</dt><dd>${esc(stats.depts[0][0])}</dd>` : ''}
+        </dl><p class="note">KPPP publishes only the bidder's name with each result; everything here is worked out from their bids.</p></section>
+        ${years.length ? `<section class="panel"><h3>Bids and wins by year</h3><div class="bars">${years.map(([y, [b, w]]) => `
+          <div class="bar"><span>${esc(y)}</span><i style="--w:${Math.max(4, Math.round(b / maxYear * 100))}%"></i><b>${fmtInt(w)} won / ${fmtInt(b)}</b></div>`).join('')}</div></section>` : ''}
+        ${rows.some((x) => x.mine?.rank) ? `<section class="panel"><h3>Where they finish</h3><div class="ranks">
           <div><b>${ranks[1]}</b><span>L1 (lowest)</span></div><div><b>${ranks[2]}</b><span>L2</span></div><div><b>${ranks[3]}</b><span>L3 or lower</span></div>
-        </div></section>` : ''}
+        </div><p class="note">From the ${fmtInt(rows.length)} tenders listed below.</p></section>` : ''}
         <div class="cp-grid">
-          ${bars('Districts', countBy(tenders, 'district'), tenders.length)}
-          ${bars('Departments', countBy(tenders, 'dept'), tenders.length)}
-          ${bars('Type of work', countBy(tenders, 'work'), tenders.length)}
-          ${topRivals.length ? `<section class="panel"><h3>Frequent competitors</h3><div class="table-wrap"><table>
-            <thead><tr><th>Competitor</th><th class="n">Met</th><th class="n">${esc(display.split(' ')[0])} ahead</th></tr></thead>
-            <tbody>${topRivals.map((v) => `<tr><td><button type="button" class="linkish" data-contractor="${esc(v.name)}">${esc(v.name)}</button></td><td class="n">${v.met}</td><td class="n">${v.ahead} of ${v.met}</td></tr>`).join('')}</tbody>
+          ${barsOf('Districts', stats.districts)}
+          ${barsOf('Departments', stats.depts)}
+          ${barsOf('Type of work', stats.works)}
+          ${stats.rivals.length ? `<section class="panel"><h3>Frequent competitors</h3><div class="table-wrap"><table>
+            <thead><tr><th>Competitor</th><th class="n">Met</th><th class="n">${esc(who.firm.split(' ')[0])} ahead</th></tr></thead>
+            <tbody>${stats.rivals.map((v) => `<tr><td><button type="button" class="linkish" data-contractor="${esc(v.name)}">${esc(splitName(v.name).firm)}</button></td><td class="n">${v.met}</td><td class="n">${v.ahead} of ${v.met}</td></tr>`).join('')}</tbody>
           </table></div></section>` : ''}
         </div>
         <section class="panel"><h3>Tenders <span class="count">${fmtInt(rows.length)}</span></h3><div class="table-wrap"><table>
-          <thead><tr><th>Awarded</th><th>Tender</th><th>Result</th><th class="n">Their bid</th><th class="n">vs estimate</th></tr></thead>
+          <thead><tr><th>Date</th><th>Tender</th><th>Result</th><th class="n">Their bid</th><th class="n">vs estimate</th></tr></thead>
           <tbody>${rows.slice(0, 200).map((x) => `<tr${x.won ? ' class="l1"' : ''}>
-            <td>${x.r._award ? esc(shortDate.format(new Date(x.r._award))) : ''}</td>
-            <td><button type="button" class="linkish item-name" data-award="${esc(x.r.nit)}">${esc(x.r.title)}</button><small>${esc([x.r.district, x.r.dept].filter(Boolean).join(' · '))}</small></td>
-            <td>${x.won ? '<b>Won</b>' : x.mine?.rank ? `L${x.mine.rank}` : ''}${!x.won && x.r.winner ? `<small>Winner: <button type="button" class="linkish" data-contractor="${esc(x.r.winner)}">${esc(x.r.winner)}</button></small>` : ''}</td>
+            <td>${x.date ? esc(shortDate.format(new Date(x.date))) + (x.old ? ` ${new Date(x.date).getFullYear()}` : '') : ''}</td>
+            <td>${R.byNit?.has(x.r.nit) ? `<button type="button" class="linkish item-name" data-award="${esc(x.r.nit)}">${esc(x.r.title)}</button>` : `<div class="item-name">${esc(x.r.title)}</div>`}<small>${esc([x.r.district, x.r.dept].filter(Boolean).join(' · '))}</small></td>
+            <td>${x.won ? '<b>Won</b>' : x.mine?.rank ? `L${x.mine.rank}` : ''}${!x.won && x.r.winner ? `<small>Winner: <button type="button" class="linkish" data-contractor="${esc(x.r.winner)}">${esc(splitName(x.r.winner).firm)}</button></small>` : ''}</td>
             <td class="n">${x.mine?.amount ? money(x.mine.amount) : ''}</td>
             <td class="n">${x.mine?.pct === null || x.mine?.pct === undefined ? '' : (x.mine.pct > 0 ? '+' : '') + x.mine.pct.toFixed(1) + '%'}</td>
           </tr>`).join('')}</tbody>
-        </table></div>${rows.length > 200 ? '<p class="note">Showing the latest 200.</p>' : ''}</section>
+        </table></div>${H ? '<p class="note">Their latest tenders since 2023 plus all recent results. For every bid they made, download the yearly Excel files in Past results and filter by their name.</p>' : ''}</section>
       </div>`;
     d.setAttribute('aria-hidden', 'false');
     d.classList.add('open');
     document.body.style.overflow = 'hidden';
     d.scrollTop = 0;
     d.querySelector('[data-close]').focus();
+    $('cpXlsx').addEventListener('click', () => downloadDoc({
+      title: display, fileBase: `contractor-${safeFile(who.firm)}`,
+      sections: [
+        { heading: 'Summary', kv: [['Contractor', display], ['Bids', stats.bids], ['Won', stats.wins], ['Value won', stats.value ? money(stats.value, { full: true }) : ''], ['Win rate', winRate === null ? '' : winRate.toFixed(1) + '%'], ['Usual winning bid', stats.winPct == null ? '' : pctText(stats.winPct)], ['Usual bid', stats.bidPct == null ? '' : pctText(stats.bidPct)], ['First bid seen', H?.first || ''], ['Latest bid', H?.last || ''], ['Based on', stats.scope]].filter(([, v]) => v !== '' && v != null) },
+        { heading: 'Tenders', head: ['Date', 'Tender number', 'Work', 'District', 'Department', 'Result', 'Their bid', 'vs estimate %', 'Winner'],
+          rows: rows.map((x) => [x.date ? new Date(x.date).toISOString().slice(0, 10) : '', x.r.ref || '', x.r.title || '', x.r.district || '', x.r.dept || '', x.won ? 'Won' : x.mine?.rank ? 'L' + x.mine.rank : '', x.mine?.amount || '', x.mine?.pct ?? '', x.won ? '' : x.r.winner || '']), widths: [12, 28, 60, 14, 30, 8, 14, 12, 40] },
+        { heading: 'Competitors', head: ['Competitor', 'Met', 'They finished ahead'], rows: stats.rivals.map((v) => [v.name, v.met, v.ahead]), widths: [50, 8, 18] }
+      ]
+    }, 'xlsx'));
     const hash = '#c=' + encodeURIComponent(display);
     if (location.hash !== hash) history.pushState({ contractor: display }, '', hash);
   }

@@ -9,6 +9,8 @@ of KPPP's awarded works tenders (about 1 lakh) and keeps, in the "history" branc
   excel/works-item-rates.xlsx       past winning rates for every BOQ item seen
   rates.json.gz               the same item rates, read by collect_details.py for live tenders
   similar.json                how similar tenders were won, per department / district and type of work
+  contractors/{xx}.json       every bidder's record since 2023 (bids, wins, where, rivals, latest tenders),
+                              split into 256 files by a hash of the name (worker/index.js looks them up)
   index.json                  what is there, for the website's download list
 
 The work is split into parts that run at the same time (each looks up every Nth page of KPPP's
@@ -17,6 +19,8 @@ continued by the next one; once the whole history is in, each run only adds new 
 """
 
 import gzip
+import re
+import zlib
 import json
 import os
 import sys
@@ -193,6 +197,85 @@ def build_similar(results):
     return out
 
 
+def name_key(name):
+    """Same as nameKey() in public/app.js and worker/index.js: KPPP writes one bidder in several ways."""
+    key = re.sub(r"\(\s*\d+\s*\)", " ", str(name or "").upper())
+    return re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9()]+", " ", key)).strip()
+
+
+def contractor_shard(key):
+    return f"{zlib.crc32(key.encode('utf-8')) & 0xff:02x}"
+
+
+def build_contractors(results, root):
+    """Every bidder's record across the whole history, for the contractor page."""
+    people = {}
+    for r in results:
+        bidders = r.get("bidders") or []
+        winner_key = name_key(r.get("winner"))
+        entries = [(b.get("name"), b) for b in bidders] or ([(r["winner"], {"rank": 1})] if r.get("winner") else [])
+        keys = [name_key(n) for n, _ in entries]
+        for (name, b), key in zip(entries, keys):
+            if not key or not re.search(r"[A-Z]{2}", key):
+                continue
+            won = b.get("rank") == 1 or key == winner_key
+            p = people.setdefault(key, {"names": {}, "bids": 0, "wins": 0, "value": 0.0, "wpct": [], "bpct": [],
+                                        "years": {}, "district": {}, "dept": {}, "work": {}, "rivals": {}, "recent": []})
+            p["names"][name] = p["names"].get(name, 0) + 1
+            p["bids"] += 1
+            year = (r.get("closed") or r.get("published") or "")[:4]
+            y = p["years"].setdefault(year, [0, 0])
+            y[0] += 1
+            pct = b.get("pct")
+            if pct is not None and -80 < pct < 80:
+                p["bpct"].append(pct)
+            if won:
+                p["wins"] += 1
+                y[1] += 1
+                p["value"] += b.get("amount") or r.get("value") or 0
+                if pct is not None and -80 < pct < 80:
+                    p["wpct"].append(pct)
+            for field in ("district", "dept", "work"):
+                if r.get(field):
+                    p[field][r[field]] = p[field].get(r[field], 0) + 1
+            for (other, ob), okey in zip(entries, keys):
+                if okey == key or not okey:
+                    continue
+                rv = p["rivals"].setdefault(okey, [other, 0, 0])
+                rv[1] += 1
+                if b.get("rank") and ob.get("rank") and b["rank"] < ob["rank"]:
+                    rv[2] += 1
+            p["recent"].append((r.get("closed") or "", {
+                "nit": r.get("nit"), "ref": r.get("ref"), "title": (r.get("title") or "")[:90], "closed": (r.get("closed") or "")[:10],
+                "district": r.get("district"), "dept": r.get("dept"), "value": r.get("value"),
+                "rank": b.get("rank"), "amount": b.get("amount"), "pct": pct,
+                "winner": None if won else r.get("winner"), "bidders": len(bidders) or None,
+            }))
+    top = lambda d, n: sorted(d.items(), key=lambda kv: -kv[1])[:n]
+    shards = {}
+    for key, p in people.items():
+        med = lambda v: round(sorted(v)[len(v) // 2], 2) if v else None
+        entry = {
+            "name": max(p["names"], key=p["names"].get), "bids": p["bids"], "wins": p["wins"], "value": round(p["value"]),
+            "winPct": med(p["wpct"]), "bidPct": med(p["bpct"]),
+            "years": dict(sorted(p["years"].items())),
+            "districts": top(p["district"], 6), "depts": top(p["dept"], 6), "works": top(p["work"], 6),
+            "rivals": sorted(p["rivals"].values(), key=lambda v: -v[1])[:8],
+            "recent": [x for _, x in sorted(p["recent"], key=lambda t: t[0], reverse=True)[:12]],
+            "first": min((d for d, _ in p["recent"] if d), default="")[:10] or None,
+            "last": max((d for d, _ in p["recent"] if d), default="")[:10] or None,
+        }
+        entry["recent"] = [{k: v for k, v in x.items() if v not in (None, "")} for x in entry["recent"]]
+        shards.setdefault(contractor_shard(key), {})[key] = entry
+    folder = root / "contractors"
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in folder.glob("*.json"):
+        old.unlink()
+    for shard, entries in shards.items():
+        (folder / f"{shard}.json").write_text(json.dumps(entries, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    return len(people)
+
+
 def date_only(value):
     return (value or "")[:10] or None
 
@@ -333,6 +416,7 @@ def build(history, parts):
     similar = build_similar(results)
     (history / "similar.json").write_text(json.dumps(similar, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     files = write_excel(results, rates, history)
+    contractors = build_contractors(results, history)
     closed = sorted(r["closed"] for r in results if r.get("closed"))
     (history / "index.json").write_text(json.dumps({
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -341,6 +425,7 @@ def build(history, parts):
         "from": closed[0][:10] if closed else None,
         "to": closed[-1][:10] if closed else None,
         "complete": bool(state.get("filled")),
+        "contractors": contractors,
         "files": files,
     }, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"Done: {len(results)} works results in history, {len(rates)} BOQ items, "
