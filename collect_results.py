@@ -45,6 +45,11 @@ FULL_VIEW = {"WORKS": "works-tender-full-view", "GOODS": "goods-tender-full-view
 LIST_PAGES = {"WORKS": int(os.getenv("RESULTS_WORKS_PAGES", "20")),
               "GOODS": int(os.getenv("RESULTS_GOODS_PAGES", "6")),
               "SERVICES": int(os.getenv("RESULTS_SERVICES_PAGES", "6"))}
+# Only works results are wanted for now; add "GOODS" / "SERVICES" here to collect them again.
+CATEGORIES = ("WORKS",)
+# The website keeps the most recent results; older ones live in the history store
+# (collect_history.py) with Excel downloads.
+RECENT_LIMIT = int(os.getenv("RESULTS_RECENT_LIMIT", "6000"))
 MAX_LOOKUPS = int(os.getenv("RESULTS_MAX_LOOKUPS", "3000"))
 # Stop listing / starting lookups after this many seconds (from the start of the run) so the
 # run always finishes and saves what it has.
@@ -79,7 +84,10 @@ def list_page(session, category, page):
 
 
 def list_awarded(session, category, cache, state, out_of_time):
-    """Newly awarded tenders first (until a page is already fully known), then older pages."""
+    """Newly awarded tenders, until a page is already fully known.
+
+    Older results are collected by collect_history.py, so this no longer walks back in time.
+    """
     rows, budget = [], LIST_PAGES[category]
     page = 0
     while budget > 0 and not out_of_time():
@@ -89,16 +97,6 @@ def list_awarded(session, category, cache, state, out_of_time):
         if not batch or all(str(r.get("nitId")) in cache for r in batch):
             break
         page += 1
-    # Spend what is left of this run's pages further back in history.
-    cursor = max(state.get(category, 1), page + 1)
-    while budget > 0 and not out_of_time():
-        batch = list_page(session, category, cursor)
-        budget -= 1
-        if not batch:
-            break
-        rows.extend(batch)
-        cursor += 1
-    state[category] = cursor
     return rows
 
 
@@ -412,7 +410,11 @@ def main():
     started = time.monotonic()
     out_of_time = lambda: time.monotonic() - started > TIME_BUDGET
     todo, seen = [], set()
-    for category in SEARCH:
+    # Drop categories that are no longer collected.
+    for nit in [n for n, r in cache.items() if r.get("cat") not in CATEGORIES]:
+        cache.pop(nit)
+        award_path(nit).unlink(missing_ok=True)
+    for category in CATEGORIES:
         try:
             listed = list_awarded(session, category, cache, state, out_of_time)
         except Exception as exc:
@@ -466,9 +468,14 @@ def main():
                 save()
                 print(f"  {ok} done ({int(time.monotonic() - started)}s)", flush=True)
 
+    # Keep only the most recent results for the website.
+    recent = sorted(cache.values(), key=lambda r: r.get("awarded") or r.get("closed") or "", reverse=True)
+    for record in recent[RECENT_LIMIT:]:
+        cache.pop(record["nit"], None)
+        award_path(record["nit"]).unlink(missing_ok=True)
     save()
     # The old single item-rates file is no longer needed once every tender has its award page.
-    if ITEMS_CACHE.exists() and all(award_path(nit).exists() for nit in old_items):
+    if ITEMS_CACHE.exists() and all(award_path(nit).exists() or nit not in cache for nit in old_items):
         ITEMS_CACHE.unlink()
     items_by_nit = {}
     for path in AWARDS.glob("*.json"):
@@ -479,7 +486,8 @@ def main():
         if items:
             items_by_nit[path.stem] = items
     for nit, items in old_items.items():
-        items_by_nit.setdefault(nit, items)
+        if nit in cache:
+            items_by_nit.setdefault(nit, items)
 
     results = sorted(cache.values(), key=lambda r: r.get("awarded") or r.get("closed") or "", reverse=True)
     TARGET.write_text(json.dumps({

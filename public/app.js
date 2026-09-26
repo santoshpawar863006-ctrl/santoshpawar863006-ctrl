@@ -616,16 +616,18 @@
     const box = $('tpBid');
     if (!t || !box) return;
     const base = num(t.value) || boqEstimate(f) || null;
-    const useSim = sim && sim.pcts?.length >= 3 ? sim : null;
+    const useSim = sim && (sim.q || sim.pcts?.length >= 3) ? sim : null;
+    const simQ = useSim ? (useSim.q || [quart(useSim.pcts, 0.25), quart(useSim.pcts, 0.5), quart(useSim.pcts, 0.75)]) : null;
+    const simN = useSim ? (useSim.q ? useSim.count : useSim.pcts.length) : 0;
     const useItems = ratio && cover >= 30 ? ratio : null;
     if (!base || (!useSim && !useItems)) { box.hidden = true; G.rec = null; return; }
-    const simBid = useSim ? base * (1 + quart(useSim.pcts, 0.5) / 100) : null;
+    const simBid = useSim ? base * (1 + simQ[1] / 100) : null;
     const itemBid = useItems ? base * useItems : null;
     // Real winning totals of similar tenders come first; item rates are the fallback.
     const rec = simBid || itemBid;
     G.rec = rec;
-    const low = useSim ? base * (1 + quart(useSim.pcts, 0.25) / 100) : rec * 0.97;
-    const high = useSim ? base * (1 + quart(useSim.pcts, 0.75) / 100) : rec * 1.03;
+    const low = useSim ? base * (1 + simQ[0] / 100) : rec * 0.97;
+    const high = useSim ? base * (1 + simQ[2] / 100) : rec * 1.03;
     const vs = (x) => { const p = (x / base - 1) * 100; return `${Math.abs(p).toFixed(1)}% ${p <= 0 ? 'below' : 'above'} ${num(t.value) ? 'tender value' : 'estimate'}`; };
     const hasBoq = Boolean($('tpBoq'));
     box.hidden = false;
@@ -637,7 +639,7 @@
         <div><span>Safer margin</span><b>${money(high, { full: true })}</b><small>${esc(vs(high))}${useSim ? ' · 1 in 4 past winners bid this or more' : ''}</small></div>
       </div>
       <ul class="bid-why">
-        ${useSim ? `<li>Winners of ${fmtInt(useSim.pcts.length)} similar tenders (${esc(useSim.scope)}) bid a median of <b>${esc(pctText(quart(useSim.pcts, 0.5)))}</b>${simBid ? ` → ${money(simBid, { full: true })}` : ''}.</li>` : ''}
+        ${useSim ? `<li>Winners of ${fmtInt(simN)} similar tenders${useSim.history ? ' since 2023' : ''} (${esc(useSim.scope)}) bid a median of <b>${esc(pctText(simQ[1]))}</b>${simBid ? ` → ${money(simBid, { full: true })}` : ''}.</li>` : ''}
         ${useItems ? `<li>${useSim ? 'For comparison, pricing' : 'Pricing'} this bill of quantities at past winners' item rates (${cover.toFixed(0)}% of the work matched) gives <b>${money(itemBid, { full: true })}</b>.</li>` : ''}
       </ul>
       <p class="note">A guide from past KPPP results only — check your own costs and never bid below them.</p>
@@ -887,7 +889,9 @@
     R.generatedAt = d.generated_at || null;
     R.all = (d.results || []).map((r) => {
       r._award = r.awarded ? Date.parse(r.awarded) : (r.closed ? Date.parse(r.closed) : 0);
-      r._hay = [r.title, r.ref, r.dept, r.office, r.district, r.work, r.winner, ...(r.bidders || []).map((b) => b.name)].filter(Boolean).join(' ').toLowerCase();
+      r._hay = norm([r.title, r.ref, r.dept, r.office, r.district, r.work, r.winner, ...(r.bidders || []).map((b) => b.name)].filter(Boolean).join(' '));
+      r._hayc = r._hay.replace(/ /g, '');
+      r._names = [...new Set([r.winner, ...(r.bidders || []).map((b) => b.name)].filter(Boolean))].map((n) => [n, norm(n)]);
       return r;
     });
     R.byNit = new Map(R.all.map((r) => [r.nit, r]));
@@ -939,6 +943,7 @@
     $('q').value = mode === 'results' ? R.q : S.q;
     $('q').placeholder = mode === 'results' ? 'Search results by work, department, town or contractor name…' : 'Search by work, tender number, department or town…';
     if (mode === 'results') {
+      loadDownloads();
       $('rTitle').textContent = 'Loading results…';
       loadResults().then(() => applyResults()).catch((err) => {
         $('rTitle').textContent = 'Results are not available yet';
@@ -947,11 +952,53 @@
     }
   }
 
+  // Search ignores dots, brackets and spacing: "p.n. shashidhar", "jeevanrekha" and "JEEVAN REKHA" all match.
+  const norm = (v) => ` ${String(v || '').toLowerCase().replace(/[^a-z0-9\u0c80-\u0cff]+/g, ' ').trim()} `.replace(/\s+/g, ' ');
+  function queryMatch(r, q) {
+    const terms = norm(q).trim().split(' ').filter(Boolean);
+    if (!terms.length) return true;
+    return terms.every((w) => r._hay.includes(w)) || r._hayc.includes(terms.join(''));
+  }
+  function matchedBidders(r, q) {
+    const terms = norm(q).trim().split(' ').filter(Boolean);
+    if (!terms.length) return [];
+    const compact = terms.join('');
+    return r._names.filter(([, n]) => terms.every((w) => n.includes(w)) || n.replace(/ /g, '').includes(compact)).map(([name]) => name);
+  }
+  // Excel downloads of every awarded works tender since 2023 (collect_history.py).
+  let downloadsLoaded = false;
+  async function loadDownloads() {
+    if (downloadsLoaded) return;
+    downloadsLoaded = true;
+    const box = $('rDownloads');
+    let idx;
+    try {
+      const r = await fetch('/history-index.json');
+      idx = r.ok ? await r.json() : null;
+    } catch { idx = null; }
+    if (!idx?.files?.length) {
+      box.hidden = false;
+      box.innerHTML = '<h3>Download all past works results (Excel)</h3><p class="muted-p">All awarded works tenders since May 2023 are being collected. The Excel files will appear here in a few hours.</p>';
+      downloadsLoaded = false;
+      return;
+    }
+    const mb = (b) => `${(b / 1048576).toFixed(b > 10485760 ? 0 : 1)} MB`;
+    const years = idx.files.filter((f) => f.year);
+    const rates = idx.files.find((f) => !f.year);
+    box.hidden = false;
+    box.innerHTML = `<h3>Download all past works results (Excel) <span class="count">${fmtInt(idx.tenders)} tenders</span></h3>
+      <p class="muted-p">Every awarded works tender${idx.from ? ` from ${esc(shortDate.format(new Date(idx.from)))} ${esc(idx.from.slice(0, 4))}` : ''} with the winner and every bidder's amount.${idx.complete ? '' : ' <b>Still collecting older tenders</b> — the files grow every few hours.'}</p>
+      <div class="dl-list">
+        ${years.map((f) => `<a class="dl" href="/downloads/${esc(f.file)}" download><b>${esc(f.year)}</b><span>${fmtInt(f.tenders)} tenders · ${fmtInt(f.bids)} bids</span><small>${mb(f.bytes)}</small></a>`).join('')}
+        ${rates ? `<a class="dl rates" href="/downloads/${esc(rates.file)}" download><b>Item rates</b><span>${fmtInt(rates.items)} BOQ items · past winning rates</span><small>${mb(rates.bytes)}</small></a>` : ''}
+      </div>
+      <p class="note">Each year file has two sheets: <b>Tenders</b> (one row per tender) and <b>All bids</b> (one row per bidder). New tenders are compared with this full history on their tender page.</p>`;
+  }
+
   function filterResults(f) {
-    const terms = (f.q || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
     return (R.all || []).filter((r) => (!f.cat || r.cat === f.cat) && (!f.district || r.district === f.district)
       && (!f.dept || r.dept === f.dept) && (!f.work || r.work === f.work)
-      && (!terms.length || terms.every((w) => r._hay.includes(w))));
+      && queryMatch(r, f.q));
   }
 
   function summarize(list) {
@@ -987,7 +1034,14 @@
     $('rMedian').textContent = sum.median === null ? '—' : `${Math.abs(sum.median).toFixed(1)}% ${sum.median <= 0 ? 'below' : 'above'}`;
     $('rBidders').textContent = sum.bidders === null ? '—' : sum.bidders.toFixed(1);
     $('rWinners').innerHTML = sum.top.length ? sum.top.map(([n, c]) => `<li><button type="button" data-win="${esc(n)}">${esc(n)}</button><b>${c}</b></li>`).join('') : '<li>—</li>';
-    $('rTitle').innerHTML = `${fmtInt(list.length)} <span>awarded tenders</span>`;
+    $('rTitle').innerHTML = `${fmtInt(list.length)} <span>awarded works tenders</span>`;
+    const people = new Map();
+    if (R.q && norm(R.q).trim().length >= 3) {
+      for (const r of list) for (const n of matchedBidders(r, R.q)) { const k = nameKey(n); const v = people.get(k) || { name: n, n: 0 }; v.n++; people.set(k, v); }
+    }
+    const chips = [...people.values()].sort((a, b) => b.n - a.n).slice(0, 8);
+    $('rPeople').hidden = !chips.length;
+    $('rPeople').innerHTML = chips.length ? `<span>Contractors matching “${esc(R.q.trim())}”:</span>${chips.map((c) => `<button type="button" class="chip" data-win="${esc(c.name)}">${esc(splitName(c.name).firm)} <b>${c.n}</b></button>`).join('')}` : '';
     for (const id of ['rCat', 'rDistrict', 'rDept', 'rWork']) $(id).classList.toggle('set', Boolean($(id).value));
     $('rList').innerHTML = '';
     moreResults();
@@ -1023,6 +1077,8 @@
   }
 
   function resultRow(r) {
+    const hits = R.q ? matchedBidders(r, R.q).filter((n) => n !== r.winner) : [];
+    const hitLine = hits.length ? `<div class="hit">Bid by ${hits.map((n) => { const b = r.bidders?.find((x) => x.name === n); return `<b>${esc(splitName(n).firm)}</b>${b?.rank ? ` (L${b.rank})` : ''}`; }).join(', ')}</div>` : '';
     const p = winPct(r);
     const tone = p === null ? '' : p <= -15 ? 'deep' : p < 0 ? 'below' : 'above';
     const when = r._award ? shortDate.format(new Date(r._award)) : '';
@@ -1032,6 +1088,7 @@
           <div class="card-top"><span class="badge ${esc(r.cat)}">${esc(r.cat)}</span>${r.work ? `<span class="badge soft">${esc(r.work)}</span>` : ''}${when ? `<span class="due">Awarded ${esc(when)}</span>` : ''}</div>
           <h3>${esc(r.title)}</h3>
           <div class="meta">${pinIcon}<span>${esc([r.district, r.dept].filter(Boolean).join(' · ') || r.office || '')}</span></div>
+          ${hitLine}
         </div>
         <div class="rside">
           <span class="rlabel">Winner</span>
@@ -1065,7 +1122,22 @@
   }
 
   // Past results for work like this tender: same department and type of work, else same type of work in the district.
+  let similarLoading = null;
+  function loadSimilar() {
+    if (!similarLoading) similarLoading = fetch('/similar-lite.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    return similarLoading;
+  }
+
   async function similarResults(t) {
+    // Whole works history (since 2023), grouped by department / district and type of work.
+    const groups = t.cat === 'WORKS' ? await loadSimilar() : null;
+    if (groups) {
+      let g = groups[`d|${t.dept || ''}|${t.work || ''}`];
+      let scope = `${t.work || 'this type of'} work in ${t.dept}`;
+      const byDistrict = t.district ? groups[`x|${t.district}|${t.work || ''}`] : null;
+      if ((!g || g.n < 5) && byDistrict && byDistrict.n > (g?.n || 0)) { g = byDistrict; scope = `${t.work || 'works'} work in ${t.district}`; }
+      if (g) return { count: g.n, median: g.q[1], q: g.q, bidders: g.bidders, top: g.top, scope, history: true };
+    }
     try { await loadResults(); } catch { return null; }
     let list = filterResults({ dept: t.dept, work: t.work, cat: t.cat });
     let scope = `${t.work || 'this type of'} work in ${t.dept}`;
@@ -1087,7 +1159,7 @@
     if (!sim || sim.median === null) { box.hidden = true; return; }
     box.hidden = false;
     box.innerHTML = `<h3>How similar tenders were won</h3>
-      <p class="muted-p">Based on ${fmtInt(sim.count)} awarded tenders for ${esc(sim.scope)}.</p>
+      <p class="muted-p">Based on ${fmtInt(sim.count)} awarded tenders${sim.history ? ' since 2023' : ''} for ${esc(sim.scope)}.</p>
       <div class="kpis" style="margin-top:12px">
         <div class="kpi"><span>Typical winning bid</span><strong>${Math.abs(sim.median).toFixed(1)}% ${sim.median <= 0 ? 'below' : 'above'}</strong><small>the estimate (median L1)</small></div>
         <div class="kpi"><span>Average bidders</span><strong>${sim.bidders === null ? '—' : sim.bidders.toFixed(1)}</strong><small>per tender</small></div>
@@ -1252,8 +1324,9 @@
   }
 
   async function annotateRates(t, f) {
-    let lib;
-    try { lib = (await loadRates()).items || {}; } catch { return; }
+    // Stored tenders come with past rates from the whole works history; others use the recent library.
+    let lib = f.past || null;
+    if (!lib) { try { lib = (await loadRates()).items || {}; } catch { return; } }
     const box = $('boqPricing');
     if (!box) return;
     let matched = 0, total = 0, estMatched = 0, pastMatched = 0, estAll = 0;

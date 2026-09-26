@@ -15,6 +15,8 @@ An action every 2 hours (`.github/workflows/collect-results.yml`) runs `collect_
 
 An hourly action (`.github/workflows/collect-details.yml`) runs `collect_details.py`, which keeps a copy of every live tender's full KPPP details and documents list in the `data` branch (`details/{CATEGORY}/{nitId}.json`, one snapshot commit that replaces the last). The website serves that copy, so tender pages open instantly, and asks KPPP live only for tenders not collected yet. When a department changes the closing date, EMD, fee, value or documents, the change is recorded and shown on the tender page.
 
+Every 6 hours `.github/workflows/collect-history.yml` runs `collect_history.py`: four parts at once look up every awarded **works** tender since May 2023 (about 1 lakh) and merge them into the `history` branch (one snapshot commit): monthly results and item-wise rates, Excel downloads per year (`/downloads/works-results-YYYY.xlsx`, `/downloads/works-item-rates.xlsx`), `similar.json` (how similar tenders were won, per department / district and type of work, used by the tender page) and `rates.json.gz` (past winning rates per BOQ item, attached to each live works tender by `collect_details.py`). The website's Past results list keeps the most recent 6,000 works results; goods and services results are no longer collected.
+
 Data commits carry a skip-build marker: the website reads the data straight from GitHub, so only code changes need a redeploy.
 
 The Worker serves the data files from this repo, falling back to the deployed copy. TenderKart blocks automated lookups, so tenders link to a TenderKart search instead.

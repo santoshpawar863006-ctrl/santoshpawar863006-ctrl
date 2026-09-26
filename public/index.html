@@ -10,8 +10,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/app.css?v=20260926c">
-<script src="/app.js?v=20260926c" defer></script>
+<link rel="stylesheet" href="/app.css?v=20260926d">
+<script src="/app.js?v=20260926d" defer></script>
 </head>
 <body>
 <header class="hero">
@@ -123,7 +123,7 @@
   </section>
   <section class="filters">
     <div class="filter-row">
-      <div class="select"><select id="rCat" aria-label="Category"><option value="">All categories</option><option value="WORKS">Works</option><option value="GOODS">Goods</option><option value="SERVICES">Services</option></select></div>
+      <div class="select" hidden><select id="rCat" aria-label="Category"><option value="">All categories</option><option value="WORKS">Works</option></select></div>
       <div class="select"><select id="rDistrict" aria-label="District"><option value="">All districts</option></select></div>
       <div class="select"><select id="rDept" aria-label="Department"><option value="">All departments</option></select></div>
       <div class="select"><select id="rWork" aria-label="Type of work"><option value="">All types of work</option></select></div>
@@ -132,7 +132,9 @@
       <button class="btn ghost" id="rReset" type="button">Reset</button>
     </div>
   </section>
-  <div class="results-head"><h2 id="rTitle">Loading results…</h2><p class="note" style="margin:0">Winners and bid amounts published by KPPP. Search a contractor's name to see their bids.</p></div>
+  <section class="panel downloads" id="rDownloads" hidden></section>
+  <div class="results-head"><h2 id="rTitle">Loading results…</h2><p class="note" style="margin:0">Recent works winners and bid amounts published by KPPP. Search a contractor's name to see their bids.</p></div>
+  <div class="people" id="rPeople" hidden></div>
   <section class="rlist" id="rList"></section>
   <div class="more"><button class="btn" id="rMore" type="button" hidden>Show more results</button></div>
 </main>
