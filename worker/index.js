@@ -325,6 +325,41 @@ async function historyFile(path, ctx, ttl, download = false) {
   return response;
 }
 
+// A bidder's record across the whole works history (collect_history.py build_contractors).
+// KPPP writes one bidder in several ways; this key matches name_key() there and nameKey() in app.js.
+const nameKey = (n) => String(n || '').toUpperCase().replace(/\(\s*\d+\s*\)/g, ' ').replace(/[^A-Z0-9()]+/g, ' ').replace(/\s+/g, ' ').trim();
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t;
+})();
+function crc32(text) {
+  let c = 0xffffffff;
+  for (const byte of new TextEncoder().encode(text)) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+async function contractorRecord(name, ctx) {
+  const key = nameKey(name);
+  if (!key || key.length > 200) return json({ success: false, message: 'Unknown contractor.' }, 400);
+  const cache = caches.default;
+  const cacheKey = new Request(`https://kppp-contractor.local/v1/${encodeURIComponent(key)}`);
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+  const shard = (crc32(key) & 0xff).toString(16).padStart(2, '0');
+  let entries = null;
+  try {
+    const upstream = await fetch(`${REPO_RAW}/history/contractors/${shard}.json`, { cf: { cacheTtl: 1800, cacheEverything: true } });
+    if (upstream.ok) entries = await upstream.json();
+  } catch {}
+  if (!entries) return json({ success: false, message: 'The full history is still being collected.' }, 404, 'public, max-age=300');
+  const record = entries[key];
+  const response = record
+    ? json({ success: true, key, ...record }, 200, 'public, max-age=3600, s-maxage=3600')
+    : json({ success: false, message: 'No past bids found for this name.' }, 404, 'public, max-age=3600');
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+}
+
 function ageHours(value) {
   const ms = Date.parse(String(value || ''));
   if (!Number.isFinite(ms)) return null;
@@ -406,6 +441,7 @@ export default {
     if (url.pathname === '/api/system_health') return systemHealth(ctx, env);
     const detail = url.pathname.match(/^\/api\/tender\/(WORKS|GOODS|SERVICES)\/(\d+)$/);
     if (detail) return tenderDetail(detail[1], detail[2], ctx);
+    if (url.pathname === '/api/contractor') return contractorRecord(url.searchParams.get('name'), ctx);
     const award = url.pathname.match(/^\/api\/award\/(\d+)$/);
     if (award) return awardDetail(award[1], ctx);
     const fileList = url.pathname.match(/^\/api\/tender-files\/(WORKS|GOODS|SERVICES)\/(\d+)$/);
