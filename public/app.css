@@ -200,6 +200,9 @@ td.my input:focus{outline:2px solid var(--brand);border-color:transparent}
 .note-flag{align-self:flex-start;font-size:11.5px;font-weight:700;color:var(--warn);background:var(--warn-soft);border-radius:6px;padding:2px 7px}
 .rside{position:relative;padding-right:42px}
 .rfav{top:0;right:0}
+.row-actions .btn.on{color:#e11d48;border-color:color-mix(in srgb,#e11d48 35%,var(--line))}
+.row-actions .btn.on svg{fill:currentColor}
+.tp-bar .btn.on svg{fill:#e11d48;color:#e11d48}
 .row-actions{display:flex;flex-wrap:wrap;gap:8px}
 .note-line{margin:0;font-size:13.5px;background:var(--warn-soft);border-radius:8px;padding:8px 10px}
 .notes .note-box{width:100%;min-height:76px;resize:vertical;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit;font-size:14px;background:var(--surface);color:var(--ink)}
