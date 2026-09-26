@@ -433,9 +433,14 @@
         <main class="tp-main">
           <section class="panel bid-guide" id="tpBid" hidden></section>
           <div id="tpFull">${loadingBlock()}</div>
+        </main>
+      </div>
+      <div class="wrap tp-wide">
+        <div id="tpBoqWrap"></div>
+        <div class="tp-pair">
           <section class="panel" id="tpSimilar" hidden></section>
           ${calculatorHtml(t)}
-        </main>
+        </div>
       </div>`;
     d.setAttribute('aria-hidden', 'false');
     d.classList.add('open');
@@ -608,8 +613,10 @@
     $('tpFull').innerHTML = `
       ${changesHtml}
       <section class="panel"><h3>Tender details</h3><dl class="facts">${terms.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></section>
-      ${files}${eligibility}${technical}${docs}${items}
+      ${files}${eligibility}${technical}${docs}
       ${f.checkedAt ? `<p class="note">Details copied from KPPP ${esc(ago(f.checkedAt) || '')} and re-checked every few hours.</p>` : ''}`;
+    // The bill of quantities gets the full page width below.
+    $('tpBoqWrap').innerHTML = items;
     if (G.t === t) G.f = f;
     if (itemCount) setupMyBid(t, f);
     updateBidGuide();
@@ -619,8 +626,8 @@
     if (f.partial) {
       $('tpFull').insertAdjacentHTML('afterbegin', '<p class="note">KPPP was slow, so this shows the main details only. Open the tender again in a minute for eligibility, documents checklist and bill of quantities.</p>');
     }
-    $('tpFull').querySelectorAll('.show-rows').forEach((b) => b.addEventListener('click', () => {
-      $('tpFull').querySelectorAll(`.more-row[data-group="${b.dataset.group}"]`).forEach((r) => { r.hidden = false; });
+    $('tpBoqWrap').querySelectorAll('.show-rows').forEach((b) => b.addEventListener('click', () => {
+      $('tpBoqWrap').querySelectorAll(`.more-row[data-group="${b.dataset.group}"]`).forEach((r) => { r.hidden = false; });
       b.remove();
     }));
   }
@@ -707,7 +714,7 @@
     if (!box) return;
     const key = `tenderone_bid_${t.cat}_${t.nit}`;
     const saved = readJSON(key, {});
-    const inputs = [...$('tpFull').querySelectorAll('input[data-my]')];
+    const inputs = [...$('tpBoqWrap').querySelectorAll('input[data-my]')];
     const item = (k) => { const [gi, ii] = k.split(':').map(Number); return f.groups[gi].items[ii]; };
     const deptAmt = (i) => num(i.amount) || (num(i.rate) && num(i.qty) ? i.rate * i.qty : 0);
     for (const inp of inputs) if (saved[inp.dataset.my] != null) inp.value = saved[inp.dataset.my];
