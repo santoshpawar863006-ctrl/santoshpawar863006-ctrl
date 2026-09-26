@@ -700,6 +700,8 @@
       const gs = document.querySelector(`[data-wg="${gi}"]`);
       if (gs) gs.textContent = groupTotal ? ` · win-more ${money(groupTotal, { full: true })}` : '';
     });
+    // No past data for this kind of tender: hide the empty win-more columns.
+    $('tpBoq')?.classList.toggle('no-win', !factor || !priced);
     if (!factor || !priced) { box.hidden = true; return; }
     box.hidden = false;
     box.innerHTML = `<div><span>To win more often — total for these items</span><strong>${money(total, { full: true })}</strong>
