@@ -322,13 +322,16 @@ def write_excel(results, rates, root):
     ws.append(["Item code", "Item", "Unit", "Tenders", "Department rate (median, Rs)", "Winning rate lowest", "Winning rate 25%",
                "Winning rate median", "Winning rate 75%", "Winning rate highest", "Winning median vs department %",
                "All bidders 25%", "All bidders median", "All bidders 75%"])
-    for key, g in sorted(rates.items(), key=lambda kv: -kv[1]["tenders"]):
+    # Items seen in only one tender make the file huge (hundreds of thousands of rows) and say
+    # little about a "usual" rate, so the workbook keeps items seen in two or more tenders.
+    shared = {k: g for k, g in rates.items() if g["tenders"] >= 2}
+    for key, g in sorted(shared.items(), key=lambda kv: -kv[1]["tenders"]):
         l1 = g["l1"]
         ws.append([g["code"], g["name"], g["unit"], g["tenders"], g["est"], *l1,
                    round((g["ratio"] - 1) * 100, 2) if g.get("ratio") else None, *g["all"]])
     name = "works-item-rates.xlsx"
     wb.save(folder / name)
-    files.append({"file": name, "year": None, "items": len(rates), "bytes": (folder / name).stat().st_size})
+    files.append({"file": name, "year": None, "items": len(shared), "bytes": (folder / name).stat().st_size})
     return files
 
 
