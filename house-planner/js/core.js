@@ -324,10 +324,14 @@ export function generate(brief) {
 export function mirrorPlan(plan, brief) {
   const B = buildable(brief);
   const cx = B.x * 2 + B.w;
+  const flipO = (o) => (o.axis === 'h'
+    ? { ...o, a: cx - o.a - o.w, hinge: o.hinge ? 0 : 1 }
+    : { ...o, pos: cx - o.pos, side: o.side ? -o.side : o.side });
   return {
     floors: plan.floors.map((fl) => ({
       ...fl,
       rooms: fl.rooms.map((r) => ({ ...r, x: cx - r.x - r.w })),
+      openings: fl.openings ? fl.openings.map(flipO) : fl.openings,
     })),
   };
 }
@@ -372,7 +376,7 @@ export function openings(rooms, ground = true) {
       const cand = [Math.max(e.a, lo) + 0.15, Math.min(e.b, hi) - 0.15 - w];
       start = cand.reduce((best, c) => (c >= e.a + 0.05 && c + w <= e.b - 0.05 && Math.abs(c + w / 2 - center) > Math.abs(best + w / 2 - center) ? c : best), start);
     }
-    doors.push({ axis: e.axis, pos: e.pos, a: start, w, side: e.side, kind, rooms: [from.id, to.id] });
+    doors.push({ axis: e.axis, pos: e.pos, a: start, w, side: e.side, hinge: 0, kind, rooms: [from.id, to.id] });
     connected.add(pairKey(from, to));
     return true;
   };
@@ -430,7 +434,7 @@ export function openings(rooms, ground = true) {
   if (entry && ground) {
     const w = DOOR_W.main;
     const a = entry.x + Math.max(0.3, entry.w * 0.72 - w / 2);
-    mainDoor = { axis: 'h', pos: entry.y + entry.d, a: Math.min(a, entry.x + entry.w - w - 0.2), w, side: -1, kind: 'main', rooms: [entry.id] };
+    mainDoor = { axis: 'h', pos: entry.y + entry.d, a: Math.min(a, entry.x + entry.w - w - 0.2), w, side: -1, hinge: 0, kind: 'main', rooms: [entry.id] };
     doors.push(mainDoor);
   }
 
@@ -489,6 +493,79 @@ export function exteriorEdges(rooms) {
     });
   }
   return out;
+}
+
+// ---------- editable openings ----------
+// A floor uses automatic doors and windows until the user edits one; then the
+// current set is stored on the floor (floor.openings) and kept as edited.
+
+export const OPENING_KINDS = {
+  main:   { cat: 'door', label: 'Main door', w: 1.05 },
+  room:   { cat: 'door', label: 'Door', w: 0.9 },
+  bath:   { cat: 'door', label: 'Toilet door', w: 0.75 },
+  open:   { cat: 'door', label: 'Open archway', w: 1.2 },
+  window: { cat: 'window', label: 'Window', w: 1.5, sill: 0.9, head: 2.1 },
+  vent:   { cat: 'window', label: 'Ventilator', w: 0.6, sill: 1.65, head: 2.1 },
+};
+
+// Rooms whose edge carries this opening.
+export function openingRooms(o, rooms) {
+  const mid = o.a + o.w / 2;
+  return rooms.filter((r) => (o.axis === 'h'
+    ? (Math.abs(r.y - o.pos) < 0.03 || Math.abs(r.y + r.d - o.pos) < 0.03) && mid > r.x && mid < r.x + r.w
+    : (Math.abs(r.x - o.pos) < 0.03 || Math.abs(r.x + r.w - o.pos) < 0.03) && mid > r.y && mid < r.y + r.d));
+}
+
+export function floorOpenings(floor, fi) {
+  if (!floor.openings) {
+    const o = openings(floor.rooms, fi === 0);
+    o.doors.forEach((d, i) => { d.id = `auto-${fi}-d${i}`; d.cat = 'door'; });
+    o.windows.forEach((w, i) => { w.id = `auto-${fi}-w${i}`; w.cat = 'window'; });
+    return { ...o, manual: false };
+  }
+  const valid = floor.openings.filter((o) => openingRooms(o, floor.rooms).length);
+  const doors = valid.filter((o) => o.cat === 'door').map((d) => ({ ...d, rooms: openingRooms(d, floor.rooms).map((r) => r.id) }));
+  const windows = valid.filter((o) => o.cat === 'window');
+  return { doors, windows, manual: true, lost: floor.openings.length - valid.length };
+}
+
+// Store the automatic set on the floor so it can be edited. Returns the id map.
+export function freezeOpenings(floor, fi) {
+  if (floor.openings) return null;
+  const o = floorOpenings(floor, fi);
+  const map = {};
+  floor.openings = [...o.doors, ...o.windows].map((x) => {
+    const id = `o${newId().slice(1)}`;
+    map[x.id] = id;
+    const { rooms: _r, room: _w, ...rest } = x;
+    return { ...rest, id };
+  });
+  return map;
+}
+
+// A new opening where the user clicked near a wall.
+export function openingAt(rooms, px, py, kind) {
+  let best = null;
+  for (const r of rooms) {
+    const edges = [
+      { axis: 'h', pos: r.y, lo: r.x, hi: r.x + r.w, dist: Math.abs(py - r.y), t: px, into: 1 },
+      { axis: 'h', pos: r.y + r.d, lo: r.x, hi: r.x + r.w, dist: Math.abs(py - r.y - r.d), t: px, into: -1 },
+      { axis: 'v', pos: r.x, lo: r.y, hi: r.y + r.d, dist: Math.abs(px - r.x), t: py, into: 1 },
+      { axis: 'v', pos: r.x + r.w, lo: r.y, hi: r.y + r.d, dist: Math.abs(px - r.x - r.w), t: py, into: -1 },
+    ];
+    for (const e of edges) {
+      if (e.t < e.lo || e.t > e.hi || e.dist > 0.45) continue;
+      if (!best || e.dist < best.dist) best = { ...e, room: r };
+    }
+  }
+  if (!best) return null;
+  const spec = OPENING_KINDS[kind];
+  const w = Math.min(spec.w, best.hi - best.lo - 0.1);
+  if (w < 0.4) return null;
+  const a = Math.min(Math.max(best.t - w / 2, best.lo + 0.05), best.hi - w - 0.05);
+  const o = { id: `o${newId().slice(1)}`, cat: spec.cat, kind, axis: best.axis, pos: best.pos, a, w };
+  if (spec.cat === 'door') { o.side = best.into; o.hinge = 0; } else { o.sill = spec.sill; o.head = spec.head; }
+  return o;
 }
 
 // ---------- compass & Vastu ----------
@@ -611,6 +688,17 @@ export function estimate(plan, brief, rate) {
     materials: MATERIALS.map((m) => ({ ...m, qty: sqft * m.per })),
   };
 }
+
+export const DEFAULT_STYLE = { wall: '#e8dcc8', accent: '#8a6f55', roof: '#b9afa0', sunHour: 10 };
+
+export const WALL_COLOURS = [
+  ['#e8dcc8', 'Ivory'], ['#f2efe8', 'White'], ['#d9c09a', 'Sand'], ['#c98f6d', 'Terracotta'],
+  ['#b9c4a7', 'Sage'], ['#c3ced6', 'Grey blue'], ['#e3c46f', 'Mustard'],
+];
+export const ACCENT_COLOURS = [
+  ['#8a6f55', 'Walnut'], ['#5f6a70', 'Slate'], ['#3e4a3d', 'Forest'], ['#9a4a3a', 'Brick'],
+  ['#d8d2c6', 'Stone'], ['#2f3437', 'Charcoal'],
+];
 
 export const DEFAULT_BRIEF = {
   plotW: 30 * FT, plotD: 40 * FT,

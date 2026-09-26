@@ -4,8 +4,51 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import {
-  WALL, HALF_WALL, PLINTH, SLAB, PARAPET, openings, exteriorEdges, bbox,
+  WALL, HALF_WALL, PLINTH, SLAB, PARAPET, floorOpenings, exteriorEdges, bbox, DEFAULT_STYLE,
 } from './core.js';
+import { doorGeometry } from './plan2d.js';
+
+
+// Sky as an equirectangular image: lights the scene (raster and path traced)
+// and fills the background. The sun itself is a DirectionalLight.
+function makeSky() {
+  const W = 256, H = 128;
+  const data = new Float32Array(W * H * 4);
+  const zen = [0.18, 0.36, 0.78], hor = [0.78, 0.86, 0.95], gnd = [0.32, 0.31, 0.28];
+  for (let y = 0; y < H; y++) {
+    const el = Math.PI / 2 - (y / (H - 1)) * Math.PI;
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      let c;
+      if (el >= 0) {
+        const t = Math.pow(Math.sin(el), 0.5);
+        c = hor.map((h, k) => h + (zen[k] - h) * t);
+      } else {
+        const t = Math.min(1, -el * 4);
+        c = hor.map((h, k) => h * (1 - t) + gnd[k] * t);
+      }
+      data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2]; data[i + 3] = 1;
+    }
+  }
+  const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat, THREE.FloatType);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// Direction toward the sun for a time of day, in world space. The road side
+// (+Z) faces `facing`; the sun rises in the east and passes to the south.
+export function sunDirection(hour, facing) {
+  const F = { N: 0, E: 90, S: 180, W: 270 }[facing] ?? 90;
+  const h = Math.min(18, Math.max(6, hour));
+  const bearing = 90 + (h - 6) * 15;
+  const elev = Math.max(4, 72 * Math.sin((Math.PI * (h - 6)) / 12)) * (Math.PI / 180);
+  const delta = ((bearing - F) * Math.PI) / 180;
+  return new THREE.Vector3(-Math.sin(delta) * Math.cos(elev), Math.sin(elev), Math.cos(delta) * Math.cos(elev));
+}
 
 const FLOOR_TINT = {
   living: 0xe9dcc6, dining: 0xe9dcc6, lounge: 0xe9dcc6, hall: 0xe9dcc6,
@@ -35,8 +78,11 @@ export class ModelView {
     this.controls.enableDamping = true;
     this.controls.maxPolarAngle = Math.PI * 0.495;
 
-    this.scene.add(new THREE.HemisphereLight(0xdfeaf5, 0x6f7a5c, 1.1));
-    const sun = new THREE.DirectionalLight(0xfff3e0, 2.2);
+    this.sky = makeSky();
+    this.scene.environment = this.sky;
+    this.scene.background = this.sky;
+    this.scene.environmentIntensity = 0.9;
+    const sun = new THREE.DirectionalLight(0xfff1dc, 2.6);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.bias = -0.0004;
@@ -58,6 +104,7 @@ export class ModelView {
       road: new THREE.MeshStandardMaterial({ color: 0x4d5054, roughness: 1 }),
       compound: new THREE.MeshStandardMaterial({ color: 0xd4c7b2, roughness: 0.95 }),
       roof: new THREE.MeshStandardMaterial({ color: 0xb9afa0, roughness: 0.95 }),
+      parapet: new THREE.MeshStandardMaterial({ color: 0x8a6f55, roughness: 0.9 }),
       car: new THREE.MeshStandardMaterial({ color: 0x35607a, roughness: 0.35, metalness: 0.4 }),
       rail: new THREE.MeshStandardMaterial({ color: 0x2f3437, roughness: 0.5, metalness: 0.5 }),
     };
@@ -70,10 +117,16 @@ export class ModelView {
 
     this.resize = this.resize.bind(this);
     new ResizeObserver(this.resize).observe(host);
+    this.controls.addEventListener('change', () => this.pt?.updateCamera());
     const loop = () => {
       this.controls.update();
-      this.renderer.render(this.scene, this.camera);
-      this.labels.render(this.scene, this.camera);
+      if (this.pt) {
+        this.pt.renderSample();
+        this.onSample?.(this.pt.samples);
+      } else {
+        this.renderer.render(this.scene, this.camera);
+        this.labels.render(this.scene, this.camera);
+      }
       this.raf = requestAnimationFrame(loop);
     };
     loop();
@@ -88,8 +141,18 @@ export class ModelView {
     this.camera.updateProjectionMatrix();
   }
 
-  setBackground(color) {
-    this.scene.background = new THREE.Color(color);
+  setBackground() { /* the sky texture is the background */ }
+
+  applyStyle(style, facing) {
+    const st = { ...DEFAULT_STYLE, ...style };
+    this.mat.wallExt.color.set(st.wall);
+    this.mat.compound.color.set(st.accent).lerp(new THREE.Color(st.wall), 0.35);
+    this.mat.parapet.color.set(st.accent);
+    this.mat.roof.color.set(st.roof);
+    this.sunDir = sunDirection(st.sunHour, facing);
+    const warm = Math.min(1, Math.max(0, (this.sunDir.y - 0.05) / 0.5));
+    this.sun.color.setRGB(1, 0.78 + 0.2 * warm, 0.6 + 0.35 * warm);
+    this.sun.intensity = 1.2 + 1.6 * warm;
   }
 
   floorMat(type) {
@@ -117,6 +180,7 @@ export class ModelView {
   build(state, opts = {}) {
     Object.assign(this.opts, opts);
     this.clear();
+    this.applyStyle(state.style, state.brief.facing);
     const { brief, plan } = state;
     const H = brief.floorH;
     const g = this.root;
@@ -150,7 +214,7 @@ export class ModelView {
       const fg = new THREE.Group();
       g.add(fg);
       const rooms = floor.rooms;
-      const { doors, windows } = openings(rooms, fi === 0);
+      const { doors, windows } = floorOpenings(floor, fi);
       const ext = exteriorEdges(rooms);
       const below = fi > 0 ? plan.floors[fi - 1].rooms : [];
       const wallH = H - SLAB;
@@ -237,7 +301,7 @@ export class ModelView {
           { axis: 'v', pos: r.x, a: r.y, b: r.y + r.d, isExt: e.left, inward: 1 },
           { axis: 'v', pos: r.x + r.w, a: r.y, b: r.y + r.d, isExt: e.right, inward: -1 },
         ];
-        for (const s of sides) if (s.isExt) this.wall(s, WALL, PARAPET, roofY, this.mat.wallExt, [], g);
+        for (const s of sides) if (s.isExt) this.wall(s, WALL, PARAPET, roofY, this.mat.parapet, [], g);
       }
       if (brief.terraceStair && stair) {
         // Headroom cabin over the stair with a door onto the terrace.
@@ -257,13 +321,14 @@ export class ModelView {
 
     // Sun and shadow camera sized to the site.
     const span = Math.max(W, D) + 8;
-    this.sun.position.set(W / 2 - span * 0.6, span * 1.1, D / 2 + span * 0.7);
+    this.sun.position.set(W / 2, 0, D / 2).addScaledVector(this.sunDir, span * 1.6);
     this.sun.target.position.set(W / 2, 0, D / 2);
     const sc = this.sun.shadow.camera;
     sc.left = -span; sc.right = span; sc.top = span; sc.bottom = -span; sc.near = 0.5; sc.far = span * 4;
     sc.updateProjectionMatrix();
 
     if (this.needsFit) { this.view('iso', state); this.needsFit = false; }
+    if (this.pt) this.pt.setScene(this.scene, this.camera);
   }
 
   wall(s, t, h, base, mat, cuts, group, low = false) {
@@ -293,21 +358,19 @@ export class ModelView {
   }
 
   doorLeaf(d, base, group) {
-    const w = d.w, th = 0.04, hgt = 2.05;
+    const hgt = 2.05;
+    const g = doorGeometry(d);
+    const open = ((d.kind === 'main' ? 30 : 65) * Math.PI) / 180;
+    const dir = [(g.P[0] - g.H[0]) * Math.cos(open) + (g.Q[0] - g.H[0]) * Math.sin(open),
+      (g.P[1] - g.H[1]) * Math.cos(open) + (g.Q[1] - g.H[1]) * Math.sin(open)];
     const pivot = new THREE.Group();
     const mat = d.kind === 'main' ? this.mat.mainDoor : this.mat.door;
-    const leaf = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, th), mat);
-    leaf.position.set(w / 2, hgt / 2, 0);
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(d.w, hgt, 0.04), mat);
+    leaf.position.set(d.w / 2, hgt / 2, 0);
     leaf.castShadow = true;
     pivot.add(leaf);
-    const open = (d.kind === 'main' ? 30 : 65) * Math.PI / 180;
-    if (d.axis === 'h') {
-      pivot.position.set(d.a, base, d.pos);
-      pivot.rotation.y = d.side > 0 ? -open : open;
-    } else {
-      pivot.position.set(d.pos, base, d.a);
-      pivot.rotation.y = -Math.PI / 2 + (d.side > 0 ? open : -open);
-    }
+    pivot.position.set(g.H[0], base, g.H[1]);
+    pivot.rotation.y = Math.atan2(-dir[1], dir[0]);
     group.add(pivot);
   }
 
@@ -384,7 +447,45 @@ export class ModelView {
   }
 
   snapshot() {
-    this.renderer.render(this.scene, this.camera);
+    if (!this.pt) this.renderer.render(this.scene, this.camera);
     return this.renderer.domElement.toDataURL('image/png');
+  }
+
+  // Photo mode: physically based path tracing in the browser (free, no server).
+  async startPhoto(onSample) {
+    const { WebGLPathTracer } = await import('three-gpu-pathtracer');
+    this.labels.domElement.hidden = true;
+    const pt = new WebGLPathTracer(this.renderer);
+    pt.bounces = 5;
+    pt.filterGlossyFactor = 0.5;
+    pt.tiles.set(2, 2);
+    pt.minSamples = 1;
+    pt.renderDelay = 0;
+    pt.fadeDuration = 300;
+    pt.dynamicLowRes = true;
+    pt.renderScale = Math.min(1, 1.5 / this.renderer.getPixelRatio());
+    pt.setScene(this.scene, this.camera);
+    this.onSample = onSample;
+    this.pt = pt;
+  }
+
+  stopPhoto() {
+    if (!this.pt) return;
+    this.pt.dispose?.();
+    this.pt = null;
+    this.onSample = null;
+    this.labels.domElement.hidden = false;
+  }
+
+  // Binary glTF of the model (opens in Blender, SketchUp, Windows 3D Viewer).
+  async exportGLB() {
+    const { GLTFExporter } = await import('three/addons/exporters/GLTFExporter.js');
+    const labels = [];
+    this.root.traverse((o) => { if (o.isCSS2DObject) { labels.push(o); o.visible = false; } });
+    try {
+      return await new Promise((resolve, reject) => new GLTFExporter().parse(this.root, resolve, reject, { binary: true, onlyVisible: true }));
+    } finally {
+      labels.forEach((o) => { o.visible = true; });
+    }
   }
 }

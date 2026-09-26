@@ -11,8 +11,11 @@
 <link rel="stylesheet" href="styles.css">
 <script type="importmap">
 { "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+  "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+  "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.9.1/build/index.module.js",
+  "three-gpu-pathtracer": "https://cdn.jsdelivr.net/npm/three-gpu-pathtracer@0.0.24/build/index.module.js"
 } }
 </script>
 </head>
@@ -43,6 +46,7 @@
       <div class="menu-list" id="exportMenu" hidden>
         <button type="button" data-export="plan">Floor plan image (PNG)</button>
         <button type="button" data-export="model">3D view image (PNG)</button>
+        <button type="button" data-export="glb">3D model for Blender / SketchUp (.glb)</button>
         <button type="button" data-export="json">Save project file (.json)</button>
         <label for="openFile">Open project file…</label>
         <input type="file" id="openFile" accept="application/json,.json" hidden>
@@ -112,12 +116,20 @@
   <main class="stage">
     <div class="stage-bar">
       <div class="seg" role="group" aria-label="Floor" id="floorTabs"></div>
+      <div class="tools" id="floorTools">
+        <button type="button" class="btn small" id="addFloorBtn" title="Add a floor on top, copied from the top floor">+ Floor</button>
+        <button type="button" class="btn small" id="removeFloorBtn" title="Remove the top floor">− Floor</button>
+      </div>
       <span class="spacer"></span>
       <div class="tools" id="planTools">
-        <div class="add-room">
-          <select id="addType" aria-label="Room type to add"></select>
-          <button type="button" class="btn small" id="addRoomBtn">Add room</button>
+        <div class="seg" role="group" aria-label="Drawing tool" id="toolSeg">
+          <button type="button" data-v="select" aria-pressed="true" title="Select, move and resize (Esc)">Select</button>
+          <button type="button" data-v="room" aria-pressed="false" title="Drag on the plan to draw a room">Draw room</button>
+          <button type="button" data-v="door" aria-pressed="false" title="Click a wall to add a door">Door</button>
+          <button type="button" data-v="window" aria-pressed="false" title="Click a wall to add a window">Window</button>
+          <button type="button" data-v="open" aria-pressed="false" title="Click a wall to add an open archway">Opening</button>
         </div>
+        <select id="addType" aria-label="Room type for new rooms"></select>
         <button type="button" class="btn small" id="flipBtn" title="Mirror the plan left to right">Flip</button>
       </div>
       <div class="tools" id="modelTools" hidden>
@@ -128,14 +140,26 @@
         <div class="seg" role="group" aria-label="Camera" id="camSeg">
           <button type="button" data-v="iso">3/4</button><button type="button" data-v="front">Front</button><button type="button" data-v="top">Top</button>
         </div>
+        <button type="button" class="btn small" id="styleBtn" aria-expanded="false">Colours &amp; sun</button>
+        <button type="button" class="btn small primary" id="photoBtn">Photo render</button>
       </div>
+    </div>
+    <div class="style-panel" id="stylePanel" hidden>
+      <div class="field"><span>Outside walls</span><div class="swatches" id="wallSwatches"></div></div>
+      <div class="field"><span>Parapet &amp; compound wall</span><div class="swatches" id="accentSwatches"></div></div>
+      <label class="field sun"><span>Time of day <b id="sunLabel">10:00</b></span><input type="range" id="sunHour" min="6.5" max="17.5" step="0.25"></label>
     </div>
     <section class="pane" id="planPane">
       <svg class="plan-svg" id="planSvg" role="img" aria-label="Floor plan"></svg>
-      <p class="hint">Click a room to edit it. Drag to move, drag an edge to resize.</p>
+      <p class="hint" id="planHint">Click a room, door or window to edit it. Drag to move, drag an edge to resize.</p>
     </section>
     <section class="pane" id="modelPane" hidden>
-      <p class="hint">Drag to orbit · scroll or pinch to zoom · right-drag to pan</p>
+      <p class="hint" id="modelHint">Drag to orbit · scroll or pinch to zoom · right-drag to pan</p>
+      <div class="photo-bar" id="photoBar" hidden>
+        <span id="photoStatus">Preparing the photo render…</span>
+        <button type="button" class="btn small" id="photoSave">Save image</button>
+        <button type="button" class="btn small" id="photoStop">Back to live view</button>
+      </div>
     </section>
     <section class="pane" id="detailsPane" hidden>
       <div class="report" id="report"></div>

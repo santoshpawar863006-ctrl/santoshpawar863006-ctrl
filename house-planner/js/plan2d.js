@@ -2,7 +2,7 @@
 // window symbols, dimensions and a north arrow. Rooms can be dragged,
 // resized from their edges, and snap to the grid and to other rooms.
 import {
-  HALF_WALL, WALL, ROOM_TYPES, fmtLen, fmtDims, fmtArea, openings, exteriorEdges,
+  HALF_WALL, WALL, fmtLen, fmtDims, fmtArea, floorOpenings, openingRooms, openingAt, exteriorEdges,
   northRotation, buildable,
 } from './core.js';
 
@@ -15,17 +15,35 @@ const el = (tag, attrs = {}, parent) => {
 };
 const r3 = (v) => Math.round(v * 1000) / 1000;
 
+// Hinge point H, closed-leaf end P and open-leaf end Q of a swinging door.
+export function doorGeometry(d) {
+  const along = d.axis === 'h' ? [1, 0] : [0, 1];
+  const normal = d.axis === 'h' ? [0, d.side || 1] : [d.side || 1, 0];
+  const p0 = d.axis === 'h' ? [d.a, d.pos] : [d.pos, d.a];
+  const p1 = [p0[0] + along[0] * d.w, p0[1] + along[1] * d.w];
+  const H = d.hinge ? p1 : p0, P = d.hinge ? p0 : p1;
+  const Q = [H[0] + normal[0] * d.w, H[1] + normal[1] * d.w];
+  const cross = (P[0] - H[0]) * (Q[1] - H[1]) - (P[1] - H[1]) * (Q[0] - H[0]);
+  return { H, P, Q, sweep: cross > 0 ? 1 : 0 };
+}
+
 export class PlanView {
-  constructor(svg, { onSelect, onChange, onCommit }) {
+  // handlers: onSelect(id) → id (may remap), onChange(), onCommit(),
+  // onDrawRoom(rect), onAddOpening(point, kind)
+  constructor(svg, handlers) {
     this.svg = svg;
-    this.onSelect = onSelect;
-    this.onChange = onChange;
-    this.onCommit = onCommit;
+    Object.assign(this, handlers);
+    this.tool = 'select';
     this.drag = null;
     svg.addEventListener('pointerdown', (e) => this.pointerDown(e));
     svg.addEventListener('pointermove', (e) => this.pointerMove(e));
     svg.addEventListener('pointerup', (e) => this.pointerUp(e));
-    svg.addEventListener('pointercancel', (e) => this.pointerUp(e));
+    svg.addEventListener('pointercancel', () => { this.drag = null; this.onChange(); });
+  }
+
+  setTool(tool) {
+    this.tool = tool;
+    this.svg.dataset.tool = tool;
   }
 
   toPlan(e) {
@@ -47,17 +65,41 @@ export class PlanView {
     return best;
   }
 
+  stored(id) {
+    return this.floor.openings?.find((o) => o.id === id);
+  }
+
   pointerDown(e) {
-    const t = e.target.closest('[data-room],[data-handle]');
+    const p = this.toPlan(e);
+    if (this.tool === 'room') {
+      const start = { x: this.snap(p.x), y: this.snap(p.y) };
+      this.drag = { mode: 'draw', start, rect: { x: start.x, y: start.y, w: 0, d: 0 } };
+      this.svg.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      return;
+    }
+    if (this.tool !== 'select') { this.onAddOpening(p, this.tool); return; }
+    const t = e.target.closest('[data-room],[data-handle],[data-opening]');
     if (!t) { this.onSelect(null); return; }
+    if (t.dataset.opening) {
+      const id = this.onSelect(t.dataset.opening) || t.dataset.opening;
+      const o = this.stored(id);
+      if (o) this.drag = { mode: 'slide', id, start: p, orig: { ...o }, moved: false };
+      this.svg.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      return;
+    }
     const id = t.dataset.room || t.dataset.handle.split(':')[0];
     const room = this.rooms.find((r) => r.id === id);
     if (!room) return;
     if (!t.dataset.handle) this.onSelect(id);
-    const p = this.toPlan(e);
+    // Doors and windows on a moved room's walls travel with it.
+    const attached = (this.floor.openings || [])
+      .filter((o) => openingRooms(o, [room]).length)
+      .map((o) => ({ o, a: o.a, pos: o.pos }));
     this.drag = {
       id, mode: t.dataset.handle ? t.dataset.handle.split(':')[1] : 'move',
-      start: p, orig: { ...room }, moved: false,
+      start: p, orig: { ...room }, moved: false, attached,
     };
     this.svg.setPointerCapture(e.pointerId);
     e.preventDefault();
@@ -67,9 +109,16 @@ export class PlanView {
     if (!this.drag) return;
     const p = this.toPlan(e);
     const d = this.drag, o = d.orig;
+    if (d.mode === 'draw') {
+      const x = this.snap(p.x), y = this.snap(p.y);
+      d.rect = { x: Math.min(x, d.start.x), y: Math.min(y, d.start.y), w: Math.abs(x - d.start.x), d: Math.abs(y - d.start.y) };
+      this.onChange();
+      return;
+    }
     const dx = p.x - d.start.x, dy = p.y - d.start.y;
     if (!d.moved && Math.hypot(dx, dy) < 0.08) return;
     d.moved = true;
+    if (d.mode === 'slide') { this.slide(d, p, dx, dy); this.onChange(); return; }
     const room = this.rooms.find((r) => r.id === d.id);
     const others = this.rooms.filter((r) => r.id !== d.id);
     const xs = others.flatMap((r) => [r.x, r.x + r.w]);
@@ -78,23 +127,63 @@ export class PlanView {
     xs.push(B.x, B.x + B.w); ys.push(B.y, B.y + B.d);
     const min = 0.6;
     if (d.mode === 'move') {
-      let x = this.snap(o.x + dx), y = this.snap(o.y + dy);
+      const x = this.snap(o.x + dx), y = this.snap(o.y + dy);
       const sx = this.snapEdge(x, xs) ?? (this.snapEdge(x + o.w, xs) != null ? this.snapEdge(x + o.w, xs) - o.w : null);
       const sy = this.snapEdge(y, ys) ?? (this.snapEdge(y + o.d, ys) != null ? this.snapEdge(y + o.d, ys) - o.d : null);
       room.x = r3(sx ?? x); room.y = r3(sy ?? y);
+      const mx = room.x - o.x, my = room.y - o.y;
+      for (const at of d.attached) {
+        at.o.a = r3(at.a + (at.o.axis === 'h' ? mx : my));
+        at.o.pos = r3(at.pos + (at.o.axis === 'h' ? my : mx));
+      }
     } else {
       const edge = d.mode;
       if (edge === 'e') { const v = this.snapEdge(o.x + o.w + dx, xs) ?? this.snap(o.x + o.w + dx); room.w = r3(Math.max(min, v - o.x)); }
       if (edge === 'w') { const v = this.snapEdge(o.x + dx, xs) ?? this.snap(o.x + dx); const nx = Math.min(v, o.x + o.w - min); room.x = r3(nx); room.w = r3(o.x + o.w - nx); }
       if (edge === 's') { const v = this.snapEdge(o.y + o.d + dy, ys) ?? this.snap(o.y + o.d + dy); room.d = r3(Math.max(min, v - o.y)); }
       if (edge === 'n') { const v = this.snapEdge(o.y + dy, ys) ?? this.snap(o.y + dy); const ny = Math.min(v, o.y + o.d - min); room.y = r3(ny); room.d = r3(o.y + o.d - ny); }
+      // Openings on a moved edge follow it.
+      for (const at of d.attached) {
+        const on = (v) => Math.abs(at.pos - v) < 0.03;
+        if (at.o.axis === 'v' && ((edge === 'e' && on(o.x + o.w)) || (edge === 'w' && on(o.x)))) at.o.pos = edge === 'e' ? r3(room.x + room.w) : room.x;
+        if (at.o.axis === 'h' && ((edge === 's' && on(o.y + o.d)) || (edge === 'n' && on(o.y)))) at.o.pos = edge === 's' ? r3(room.y + room.d) : room.y;
+      }
     }
     this.onChange();
   }
 
+  // Drag a door or window along its wall, or across to another wall.
+  slide(d, p, dx, dy) {
+    const o = this.stored(d.id);
+    if (!o) return;
+    const orig = d.orig;
+    const off = orig.axis === 'h' ? Math.abs(p.y - orig.pos) : Math.abs(p.x - orig.pos);
+    if (off > 0.4) {
+      const c = openingAt(this.rooms, p.x, p.y, orig.kind);
+      if (c) {
+        Object.assign(o, { axis: c.axis, pos: c.pos, a: r3(this.snap(c.a)) });
+        if (o.cat === 'door') o.side = c.side;
+        return;
+      }
+    }
+    Object.assign(o, { axis: orig.axis, pos: orig.pos, side: orig.side });
+    const hosts = openingRooms(orig, this.rooms);
+    const lo = Math.min(...hosts.map((r) => (orig.axis === 'h' ? r.x : r.y)));
+    const hi = Math.max(...hosts.map((r) => (orig.axis === 'h' ? r.x + r.w : r.y + r.d)));
+    const a = this.snap(orig.a + (orig.axis === 'h' ? dx : dy));
+    o.a = r3(Math.min(Math.max(a, lo + 0.05), hi - o.w - 0.05));
+  }
+
   pointerUp() {
-    if (this.drag?.moved) this.onCommit();
+    const d = this.drag;
     this.drag = null;
+    if (!d) return;
+    if (d.mode === 'draw') {
+      if (d.rect.w >= 0.6 && d.rect.d >= 0.6) this.onDrawRoom(d.rect);
+      else this.onChange();
+      return;
+    }
+    if (d.moved) this.onCommit();
   }
 
   render(state, floorIdx, selectedId) {
@@ -102,6 +191,7 @@ export class PlanView {
     const svg = this.svg;
     const { brief, unit } = state;
     const floor = state.plan.floors[floorIdx];
+    this.floor = floor;
     this.rooms = floor.rooms;
     const pad = 2.2;
     const W = brief.plotW, D = brief.plotD;
@@ -130,7 +220,7 @@ export class PlanView {
       for (const r of state.plan.floors[floorIdx - 1].rooms) el('rect', { x: r.x, y: r.y, width: r.w, height: r.d }, gb);
     }
 
-    const { doors, windows } = openings(floor.rooms, floorIdx === 0);
+    const { doors, windows } = floorOpenings(floor, floorIdx);
     const ext = exteriorEdges(floor.rooms);
 
     // Room fills.
@@ -205,18 +295,11 @@ export class PlanView {
         else el('line', { x1: d.pos, y1: d.a, x2: d.pos, y2: d.a + d.w, class: 'arch' }, dg);
         continue;
       }
-      const s = d.side, w = d.w;
-      if (d.axis === 'h') {
-        const hx = d.a, hy = d.pos;
-        el('line', { x1: hx, y1: hy, x2: hx, y2: hy + s * w, class: 'leaf' }, dg);
-        el('path', { d: `M ${hx + w} ${hy} A ${w} ${w} 0 0 ${s > 0 ? 1 : 0} ${hx} ${hy + s * w}`, class: 'swing' }, dg);
-      } else {
-        const hx = d.pos, hy = d.a;
-        el('line', { x1: hx, y1: hy, x2: hx + s * w, y2: hy, class: 'leaf' }, dg);
-        el('path', { d: `M ${hx} ${hy + w} A ${w} ${w} 0 0 ${s > 0 ? 0 : 1} ${hx + s * w} ${hy}`, class: 'swing' }, dg);
-      }
+      const g = doorGeometry(d);
+      el('line', { x1: g.H[0], y1: g.H[1], x2: g.Q[0], y2: g.Q[1], class: 'leaf' }, dg);
+      el('path', { d: `M ${g.P[0]} ${g.P[1]} A ${d.w} ${d.w} 0 0 ${g.sweep} ${g.Q[0]} ${g.Q[1]}`, class: 'swing' }, dg);
       if (d.kind === 'main') {
-        el('text', { x: d.a + w / 2, y: d.pos + 0.75, class: 'tag', 'font-size': fs * 0.8 }, dg).textContent = 'ENTRY';
+        el('text', { x: d.a + d.w / 2, y: d.pos + 0.75, class: 'tag', 'font-size': fs * 0.8 }, dg).textContent = 'ENTRY';
       }
     }
 
@@ -230,6 +313,21 @@ export class PlanView {
       const tg = el('g', { transform: vertical ? `rotate(-90 ${cx} ${cy})` : '' }, lg);
       el('text', { x: cx, y: cy - size * 0.2, class: 'room-name', 'font-size': size }, tg).textContent = r.name.toUpperCase();
       el('text', { x: cx, y: cy + size * 1.0, class: 'room-dim', 'font-size': size * 0.82 }, tg).textContent = fmtDims(r.w, r.d, unit);
+    }
+
+    // Click targets for doors and windows, and the selected one's outline.
+    const og = el('g', { class: 'o-hits' }, svg);
+    for (const o of [...doors, ...windows]) {
+      const t = 0.5;
+      const attrs = o.axis === 'h'
+        ? { x: o.a, y: o.pos - t / 2, width: o.w, height: t }
+        : { x: o.pos - t / 2, y: o.a, width: t, height: o.w };
+      el('rect', { ...attrs, class: `o-hit${o.id === selectedId ? ' selected' : ''}`, 'data-opening': o.id }, og);
+    }
+    if (this.drag?.mode === 'draw') {
+      const r = this.drag.rect;
+      el('rect', { x: r.x, y: r.y, width: r.w, height: r.d, class: 'draw-preview' }, svg);
+      if (r.w > 0.3 && r.d > 0.3) el('text', { x: r.x + r.w / 2, y: r.y + r.d / 2, class: 'room-dim', 'font-size': fs }, svg).textContent = fmtDims(r.w, r.d, unit);
     }
 
     // Resize handles for the selected room.
